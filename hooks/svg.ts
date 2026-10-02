@@ -1,0 +1,143 @@
+import type { Level } from '../types'
+
+/** Fills that read on both the desktop's light and dark themes. */
+export const SVG_COLOR: Record<Level | 'ctx', string> = {
+  calm: '#4f9e6a',
+  warm: '#d4923a',
+  hot: '#d9563f',
+  ctx: '#6f8fbf',
+}
+const TRACK = 'fill="#808080" fill-opacity="0.28"'
+const TICK = '#8a877f'
+
+const clamp = (n: number, lo = 0, hi = 100) => Math.min(hi, Math.max(lo, n))
+const r1 = (n: number) => Math.round(n * 10) / 10
+
+function esc(text: string): string {
+  return text.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
+}
+
+/** How wide the fill is: a sliver for any spend at all, so $0.33 of $500 still shows. */
+function fillWidth(percent: number, width: number): number {
+  if (percent <= 0) return 0
+
+  return r1(Math.max(2, (clamp(percent) / 100) * width))
+}
+
+const REDUCED = '@media (prefers-reduced-motion:reduce){*{animation:none!important}.sh{display:none}}'
+
+export type BarSvg = {
+  percent: number
+  pace?: number
+  width: number
+  color: string
+  title: string
+  /** Pulse: grow in from this percent, sweep a sheen, breathe the pace tick, glow when hot. */
+  motion?: { from: number; isHot: boolean }
+}
+
+/** A rounded bar with its pace tick, `width` px wide and 14 px tall. */
+export function barSvg({ percent, pace, width, color, title, motion }: BarSvg): string {
+  const h = 14
+  const bh = motion ? 8 : 6
+  const y = (h - bh) / 2
+  const fw = fillWidth(percent, width)
+  const tx = pace === undefined ? undefined : r1(Math.min(width - 2, (clamp(pace) / 100) * width))
+  const parts: string[] = [`<title>${esc(title)}</title>`]
+
+  if (motion) {
+    const ratio = fw > 0 ? r1(clamp(fillWidth(motion.from, width) / fw, 0, 1) * 100) / 100 : 1
+    parts.push(
+      '<style>',
+      `.f{transform-box:fill-box;transform-origin:left center;animation:g .9s cubic-bezier(.2,.8,.2,1) both}`,
+      `@keyframes g{from{transform:scaleX(${ratio})}to{transform:scaleX(1)}}`,
+      `.sh{animation:s 3.2s ease-in-out 1s infinite}`,
+      `@keyframes s{0%{transform:translateX(-${Math.round(width * 0.3)}px)}55%,100%{transform:translateX(${width}px)}}`,
+      `.p{animation:b 2.4s ease-in-out infinite}`,
+      `@keyframes b{0%,100%{opacity:.35}50%{opacity:1}}`,
+      `.o{animation:o 2.2s ease-in-out infinite}`,
+      `@keyframes o{0%,100%{opacity:0}50%{opacity:.7}}`,
+      REDUCED,
+      '</style>',
+      `<clipPath id="c"><rect x="0" y="${y}" width="${fw}" height="${bh}" rx="${bh / 2}"/></clipPath>`,
+    )
+  }
+  if (motion?.isHot) {
+    parts.push(
+      `<rect class="o" x="0.5" y="${y - 1.5}" width="${width - 1}" height="${bh + 3}" rx="${bh / 2 + 1.5}" fill="none" stroke="${color}" stroke-width="1"/>`,
+    )
+  }
+  parts.push(`<rect x="0" y="${y}" width="${width}" height="${bh}" rx="${bh / 2}" ${TRACK}/>`)
+  if (fw > 0) {
+    parts.push(`<rect${motion ? ' class="f"' : ''} x="0" y="${y}" width="${fw}" height="${bh}" rx="${bh / 2}" fill="${color}"/>`)
+    if (motion) {
+      parts.push(
+        `<g clip-path="url(#c)"><rect class="sh" x="0" y="${y}" width="${Math.round(width * 0.3)}" height="${bh}" fill="#fff" fill-opacity="0.45"/></g>`,
+      )
+    }
+  }
+  if (tx !== undefined) {
+    parts.push(`<rect${motion ? ' class="p"' : ''} x="${tx}" y="0" width="2" height="${h}" rx="1" fill="${TICK}"/>`)
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}">${parts.join('')}</svg>`
+}
+
+export type RuleSegment = { percent: number; pace?: number; color: string; title: string }
+
+/** The ledger's hairline: one 3 px segment per gauge across `width` px, ticks rising above. */
+export function ruleSvg(segments: readonly RuleSegment[], width: number): string {
+  const h = 7
+  const gap = 8
+  const n = Math.max(1, segments.length)
+  const sw = (width - gap * (n - 1)) / n
+  const parts = segments.map((s, i) => {
+    const x = r1(i * (sw + gap))
+    const fw = fillWidth(s.percent, sw)
+    const tick =
+      s.pace === undefined ? '' : `<rect x="${r1(x + Math.min(sw - 2, (clamp(s.pace) / 100) * sw))}" y="0" width="2" height="${h}" fill="${TICK}"/>`
+
+    return (
+      `<g><title>${esc(s.title)}</title>` +
+      `<rect x="${x}" y="4" width="${r1(sw)}" height="3" ${TRACK}/>` +
+      (fw > 0 ? `<rect x="${x}" y="4" width="${fw}" height="3" fill="${s.color}"/>` : '') +
+      `${tick}</g>`
+    )
+  })
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}" preserveAspectRatio="none">${parts.join('')}</svg>`
+}
+
+/** A dot that pings while a turn runs. */
+export function liveDotSvg(color: string): string {
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">' +
+    '<title>A turn is running</title>' +
+    '<style>.r{transform-box:fill-box;transform-origin:center;animation:p 1.6s ease-out infinite}' +
+    '@keyframes p{0%{transform:scale(1);opacity:.55}100%{transform:scale(2.6);opacity:0}}' +
+    `${REDUCED}</style>` +
+    `<circle class="r" cx="6" cy="6" r="2.2" fill="${color}"/>` +
+    `<circle cx="6" cy="6" r="2.6" fill="${color}"/>` +
+    '</svg>'
+  )
+}
+
+/** A small line of recent daily spend that draws itself in. */
+export function sparkSvg(values: readonly number[], color: string, title: string): string {
+  const w = 44
+  const h = 16
+  const top = Math.max(0, ...values)
+  const step = values.length > 1 ? (w - 2) / (values.length - 1) : 0
+  const points = values
+    .map((v, i) => `${r1(1 + i * step)},${r1(h - 2 - (top > 0 ? (v / top) * (h - 4) : 0))}`)
+    .join(' ')
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<title>${esc(title)}</title>` +
+    '<style>.l{stroke-dasharray:120;animation:d 1.4s ease-out .3s both}@keyframes d{from{stroke-dashoffset:120}to{stroke-dashoffset:0}}' +
+    `${REDUCED}</style>` +
+    `<polyline class="l" points="${points}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>` +
+    '</svg>'
+  )
+}

@@ -440,3 +440,34 @@ export function visibleView(view: View, shown: Shown): View {
     contextPercent: shown.context ? view.contextPercent : undefined,
   }
 }
+
+/** How the band draws, chosen with `/usagebar style`. */
+export const STYLES = ['classic', 'chips', 'ledger', 'pulse'] as const
+export type Style = (typeof STYLES)[number]
+
+export function parseStyle(word: string): Style | undefined {
+  const w = word.toLowerCase()
+
+  return (STYLES as readonly string[]).includes(w) ? (w as Style) : undefined
+}
+
+/** A percentage that never reads 0% once anything is spent. */
+export function percentLabel(percent: number): string {
+  if (percent <= 0) return '0%'
+  if (percent < 0.1) return '<0.1%'
+  if (percent < 10) return `${Math.round(percent * 10) / 10}%`
+
+  return `${Math.round(percent)}%`
+}
+
+const EIGHTHS = ['', '▏', '▎', '▍', '▌', '▋', '▊', '▉']
+
+/** A bar at an eighth of a cell, so small amounts still show: the filled part and the rest. */
+export function smoothBar(percent: number, width: number): { fill: string; rest: string } {
+  const eighths = percent > 0 ? Math.max(1, Math.round((clamp(percent) / 100) * width * 8)) : 0
+  const full = Math.floor(eighths / 8)
+  const part = EIGHTHS[eighths % 8]!
+  const fill = '█'.repeat(full) + part
+
+  return { fill, rest: '░'.repeat(Math.max(0, width - full - (part ? 1 : 0))) }
+}

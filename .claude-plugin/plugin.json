@@ -1,7 +1,7 @@
 {
   "name": "usage-statusbar",
   "displayName": "Usage Status Bar",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A slim colored line above the prompt with your real usage: subscription windows, org spend limits, budgets, context and cost",
   "author": {
     "name": "Khai Stimpson"
@@ -19,6 +19,18 @@
         "both"
       ],
       "default": "band"
+    },
+    "style": {
+      "type": "string",
+      "title": "Style",
+      "description": "How the band looks. classic: thin text bars. chips: each figure in its own rounded pill. ledger: the figures as one line with a thin progress rule under them. pulse: rounded bars that animate on the desktop, with a live dot while a turn runs. /usagebar style <name> switches it.",
+      "options": [
+        "classic",
+        "chips",
+        "ledger",
+        "pulse"
+      ],
+      "default": "classic"
     },
     "show_5h": {
       "type": "boolean",

@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, SessionUsage } from 'claude-code'
+import type { EngineInterface, Register, RenderChildren, SessionUsage, Timer } from 'claude-code'
 
 import type { AdminReading, Level, Period, Snapshot } from '../types'
 import { readAdmin } from './admin'
@@ -19,12 +19,17 @@ import {
   hitsFullIn,
   MINUTE,
   parsePart,
+  parseStyle,
   PARTS,
+  percentLabel,
+  smoothBar,
   sparkline,
   statusText,
+  STYLES,
   visibleView,
 } from './model'
-import type { Gauge, Options, Part, Shown, View } from './model'
+import type { Gauge, Options, Part, Shown, Style, View } from './model'
+import { barSvg, liveDotSvg, ruleSvg, sparkSvg, SVG_COLOR } from './svg'
 
 const PANE = 'usage-statusbar'
 const COMMAND = 'usagebar'
@@ -49,6 +54,7 @@ const PERIODS: readonly Period[] = ['daily', 'weekly', 'monthly']
 
 type Settings = Options & {
   display: string
+  style: Style
   adminKey: string
   adminUser: string
   adminWorkspaceId: string
@@ -61,6 +67,7 @@ function readSettings(options: Readonly<Record<string, unknown>>): Settings {
 
   return {
     display: String(options.display ?? 'band'),
+    style: parseStyle(String(options.style ?? 'classic')) ?? 'classic',
     budgetUsd: Number(options.budget_usd ?? 0) || 0,
     budgetPeriod: PERIODS.includes(period) ? period : 'monthly',
     orgLimitUsd: Number(options.org_limit_usd ?? 0) || 0,
@@ -107,6 +114,24 @@ let own: SessionLedger | undefined
 let adminKey = ''
 // The band's width at its last draw, for /usagebar status.
 let bandColumns: number | undefined
+// Pulse: the percent each bar last drew at, so the next one grows from there.
+const drawnPercent = new Map<string, number>()
+// Pulse on the terminal: a dot that beats while a turn runs.
+const PULSE_FRAMES = ['·', '•', '●', '•']
+let pulseFrame = 0
+let pulseTimer: Timer | undefined
+
+function pulseTicker($: EngineInterface, isOn: boolean) {
+  if (isOn && !pulseTimer) {
+    pulseTimer = $.clock.every(400, () => {
+      pulseFrame += 1
+      $.ui.invalidate('ui.render')
+    })
+  } else if (!isOn && pulseTimer) {
+    pulseTimer.cancel()
+    pulseTimer = undefined
+  }
+}
 
 function adminFetch($: EngineInterface): AdminFetch {
   return (url, init) => $.http.fetch(url, init)
@@ -242,7 +267,7 @@ async function statusReport($: EngineInterface): Promise<string> {
   const spend = await read($, spendAtom)
   const usd = (n: number) => (n > 0 ? formatUsd(n) : 'off')
   const lines = [
-    `Settings: display ${settings.display} · budget_usd ${usd(settings.budgetUsd)} (${settings.budgetPeriod}) · org_limit_usd ${usd(settings.orgLimitUsd)} · Admin API key ${adminKey ? 'set' : 'not set'}${settings.adminUser ? ` · admin_user ${settings.adminUser}` : ''}${settings.adminWorkspaceId ? ` · workspace ${settings.adminWorkspaceId}` : ''}`,
+    `Settings: display ${settings.display} · style ${settings.style} · budget_usd ${usd(settings.budgetUsd)} (${settings.budgetPeriod}) · org_limit_usd ${usd(settings.orgLimitUsd)} · Admin API key ${adminKey ? 'set' : 'not set'}${settings.adminUser ? ` · admin_user ${settings.adminUser}` : ''}${settings.adminWorkspaceId ? ` · workspace ${settings.adminWorkspaceId}` : ''}`,
   ]
   const kinds = (snapshot?.windows ?? []).map(w => `${w.kind} ${w.percentUsed}%`)
   lines.push(
@@ -284,6 +309,8 @@ export const register: Register = (on, options) => {
   others = []
   own = undefined
   adminKey = settings.adminKey
+  pulseTimer?.cancel()
+  pulseTimer = undefined
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -293,7 +320,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: COMMAND,
       description: 'Usage details pane: windows, spend, forecast and cost per turn',
-      argumentHint: '[status | show|hide|only <parts> | budget <usd> [period] | period <p> | refresh | close]',
+      argumentHint: '[status | style <name> | show|hide|only <parts> | budget <usd> [period] | period <p> | refresh | close]',
     })
 
     const sessionId = await $.session.id()
@@ -410,6 +437,19 @@ export const register: Register = (on, options) => {
         text: `Budget period set to ${period}${period === 'weekly' ? ' (weeks start Monday)' : ''}.${settings.budgetUsd > 0 ? '' : ` Set an amount with /${COMMAND} budget <usd>.`}`,
       }
     }
+    if (verb === 'style') {
+      const style = parseStyle(arg)
+      if (!style) return { text: `Usage: /${COMMAND} style <${STYLES.join(' | ')}>. It's ${settings.style} now.` }
+      const denied = await setOption($, 'style', style)
+      if (denied) return { text: `Could not set the style: ${denied}` }
+      settings = { ...settings, style }
+      drawnPercent.clear()
+      $.ui.invalidate('ui.render')
+
+      return {
+        text: `The bar now draws in the ${style} style.${isBand ? '' : ` It shows once display is band or both.`}`,
+      }
+    }
     if (verb === 'status') return { text: await statusReport($) }
     const opened = await $.ui.open({ id: PANE, title: 'Usage' })
 
@@ -422,13 +462,117 @@ export const register: Register = (on, options) => {
     const view = visibleView(await currentView($, now), settings.shown)
     if (!hasAnything(view)) return next(e)
     const rate = burnRate(await read($, historyAtom), now)
-    const { Box, Text } = $.ui.resolve(e)
+    const table = $.ui.resolve(e)
+    const { Box, Text } = table
+    const isTerminal = e.surface === 'terminal'
+    // The terminal's table names Svg too, drawing nothing; only the other surfaces paint it.
+    const Svg = !isTerminal && 'Svg' in table ? table.Svg : undefined
     const columns = e.props.bodyColumns
     bandColumns = columns
-    const isNarrow = columns < 100
+    const style = settings.style
+    // SVG bars are narrower than cells, so the new styles keep them down to 70 columns.
+    const isNarrow = columns < (Svg && style !== 'classic' ? 70 : 100)
     const barWidth = columns >= 140 ? 10 : 8
+    pulseTicker($, style === 'pulse' && isTerminal && e.props.isWorking)
 
-    const bar = (percent: number, width: number, pace: number | undefined, color: string) => {
+    const ctx = view.contextPercent
+    const ctxLevel: Level = ctx === undefined ? 'calm' : ctx >= 90 ? 'hot' : ctx >= 75 ? 'warm' : 'calm'
+
+    if (style === 'classic') {
+      const bar = (percent: number, width: number, pace: number | undefined, color: string) => {
+        const runs: { cell: string; n: number }[] = []
+        for (const cell of barCells(percent, width, pace)) {
+          const last = runs[runs.length - 1]
+          if (last && last.cell === cell) last.n += 1
+          else runs.push({ cell, n: 1 })
+        }
+
+        return (
+          <Box>
+            {runs.map(run =>
+              run.cell === 'tick' ? (
+                <Text color={COLOR.tick}>┃</Text>
+              ) : (
+                <Text color={run.cell === 'fill' ? color : COLOR.track}>{'━'.repeat(run.n)}</Text>
+              ),
+            )}
+          </Box>
+        )
+      }
+
+      const gauge = (g: Gauge, width: number) => {
+        const color = COLOR[g.level]
+        const isMoney = g.spentUsd !== undefined && g.limitUsd !== undefined
+        const value = isMoney ? `${g.isEstimate ? '≈' : ''}${formatUsd(g.spentUsd!)}` : `${g.percent}%`
+        const note = isNarrow ? undefined : gaugeNote(g, g.id === 'five_hour' ? rate : undefined, now)
+
+        return (
+          <Box gap={1}>
+            <Text dimColor={g.level !== 'hot'} color={g.level === 'hot' ? COLOR.hot : undefined}>
+              {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
+            </Text>
+            {!isNarrow && bar(g.percent, width, g.pace, color)}
+            <Text bold color={g.level === 'calm' ? undefined : color}>
+              {value}
+            </Text>
+            {isMoney && <Text dimColor>/ {formatUsd(g.limitUsd!)}</Text>}
+            {!isNarrow && g.resetsAt !== undefined && <Text dimColor>↻{formatReset(g.resetsAt, now)}</Text>}
+            {note && <Text color={color}>{note}</Text>}
+          </Box>
+        )
+      }
+
+      const figure = (label: string, value: string) => (
+        <Box gap={1}>
+          <Text dimColor>{label}</Text>
+          <Text>{value}</Text>
+        </Box>
+      )
+
+      return (
+        <Box paddingX={1} columnGap={isNarrow ? 1 : 2} flexWrap="wrap">
+          {view.windows.map(g => gauge(g, barWidth))}
+          {view.spend && gauge(view.spend, isNarrow ? barWidth : barWidth + 4)}
+          {view.monthUsd !== undefined &&
+            figure('month', `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`)}
+          {view.todayUsd !== undefined && figure('today', formatUsd(view.todayUsd))}
+          {view.sessionUsd !== undefined &&
+            (view.isApiMode ? figure('session', formatUsd(view.sessionUsd)) : <Text>{formatUsd(view.sessionUsd)}</Text>)}
+          {ctx !== undefined && (
+            <Box gap={1}>
+              <Text dimColor>ctx</Text>
+              {!isNarrow && bar(ctx, 6, undefined, ctxLevel === 'calm' ? COLOR.ctx : COLOR[ctxLevel])}
+              <Text bold color={ctxLevel === 'calm' ? undefined : COLOR[ctxLevel]}>
+                {Math.round(ctx)}%
+              </Text>
+            </Box>
+          )}
+          {columns >= 150 && (
+            <Box flexGrow={1} justifyContent="flex-end">
+              <Text dimColor>/{COMMAND} for details</Text>
+            </Box>
+          )}
+        </Box>
+      )
+    }
+
+    // chips, ledger and pulse share their pieces; the desktop draws bars as SVG.
+    const tone = (level: Level) => (isTerminal ? COLOR[level] : SVG_COLOR[level])
+    const toneOf = (level: Level) => (level === 'calm' ? undefined : tone(level))
+    const ctxColor = ctxLevel === 'calm' ? (isTerminal ? COLOR.ctx : SVG_COLOR.ctx) : tone(ctxLevel)
+    const gauges = [...view.windows, ...(view.spend ? [view.spend] : [])]
+    const isMoney = (g: Gauge) => g.spentUsd !== undefined && g.limitUsd !== undefined
+    const amount = (g: Gauge) => (isMoney(g) ? `${g.isEstimate ? '≈' : ''}${formatUsd(g.spentUsd!)}` : percentLabel(g.percent))
+    const noteOf = (g: Gauge) => (isNarrow ? undefined : gaugeNote(g, g.id === 'five_hour' ? rate : undefined, now))
+    const titleOf = (g: Gauge) =>
+      `${g.label}: ${percentLabel(g.percent)} used${g.pace !== undefined ? `, ${percentLabel(g.pace)} of the window gone` : ''}`
+    const figures: { label: string; value: string; isSession?: boolean }[] = []
+    if (view.monthUsd !== undefined) figures.push({ label: 'month', value: `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}` })
+    if (view.todayUsd !== undefined) figures.push({ label: 'today', value: formatUsd(view.todayUsd) })
+    if (view.sessionUsd !== undefined) figures.push({ label: 'session', value: formatUsd(view.sessionUsd), isSession: true })
+
+    // A bar of cells for the terminal: fill, pace tick, track.
+    const cellBar = (percent: number, width: number, pace: number | undefined, color: string, glyph = '━') => {
       const runs: { cell: string; n: number }[] = []
       for (const cell of barCells(percent, width, pace)) {
         const last = runs[runs.length - 1]
@@ -442,66 +586,215 @@ export const register: Register = (on, options) => {
             run.cell === 'tick' ? (
               <Text color={COLOR.tick}>┃</Text>
             ) : (
-              <Text color={run.cell === 'fill' ? color : COLOR.track}>{'━'.repeat(run.n)}</Text>
+              <Text color={run.cell === 'fill' ? color : COLOR.track}>{glyph.repeat(run.n)}</Text>
             ),
           )}
         </Box>
       )
     }
+    const svg = (source: string, alt: string, width: number | undefined, height: number) =>
+      Svg ? <Svg source={source} alt={alt} width={width} height={height} isInteractive /> : undefined
 
-    const gauge = (g: Gauge, width: number) => {
-      const color = COLOR[g.level]
-      const isMoney = g.spentUsd !== undefined && g.limitUsd !== undefined
-      const value = isMoney ? `${g.isEstimate ? '≈' : ''}${formatUsd(g.spentUsd!)}` : `${g.percent}%`
-      const note = isNarrow ? undefined : gaugeNote(g, g.id === 'five_hour' ? rate : undefined, now)
+    if (style === 'chips') {
+      const chip = (level: Level, children: RenderChildren[]) => (
+        <Box
+          borderStyle="round"
+          borderDimColor={level === 'calm'}
+          borderColor={toneOf(level)}
+          paddingX={1}
+          gap={1}
+          alignItems="center"
+        >
+          {children}
+        </Box>
+      )
+      const meter = (percent: number, pace: number | undefined, level: Level, title: string, color: string) =>
+        isNarrow
+          ? undefined
+          : Svg
+            ? svg(barSvg({ percent, pace, width: 84, color, title }), title, 84, 14)
+            : cellBar(percent, barWidth, pace, color)
+      const chips: RenderChildren[] = []
+      for (const g of gauges) {
+        const note = noteOf(g)
+        chips.push(
+          chip(g.level, [
+            <Text color={toneOf(g.level)} dimColor={g.level === 'calm'}>
+              {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
+            </Text>,
+            meter(g.percent, g.pace, g.level, titleOf(g), tone(g.level)),
+            <Text bold color={toneOf(g.level)}>
+              {amount(g)}
+            </Text>,
+            isMoney(g) ? <Text dimColor>of {formatUsd(g.limitUsd!)}</Text> : undefined,
+          ]),
+        )
+        if (!isNarrow && g.resetsAt !== undefined) chips.push(chip('calm', [<Text dimColor>↻ {formatReset(g.resetsAt, now)}</Text>]))
+        if (note) chips.push(chip(g.level === 'calm' ? 'warm' : g.level, [<Text color={tone(g.level === 'calm' ? 'warm' : g.level)}>{note}</Text>]))
+      }
+      for (const f of figures) chips.push(chip('calm', [<Text dimColor>{f.label}</Text>, <Text bold>{f.value}</Text>]))
+      if (ctx !== undefined) {
+        chips.push(
+          chip(ctxLevel, [
+            <Text dimColor>ctx</Text>,
+            meter(ctx, undefined, ctxLevel, `context ${Math.round(ctx)}% full`, ctxColor),
+            <Text bold color={toneOf(ctxLevel)}>
+              {Math.round(ctx)}%
+            </Text>,
+          ]),
+        )
+      }
 
       return (
-        <Box gap={1}>
-          <Text dimColor={g.level !== 'hot'} color={g.level === 'hot' ? COLOR.hot : undefined}>
-            {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
-          </Text>
-          {!isNarrow && bar(g.percent, width, g.pace, color)}
-          <Text bold color={g.level === 'calm' ? undefined : color}>
-            {value}
-          </Text>
-          {isMoney && <Text dimColor>/ {formatUsd(g.limitUsd!)}</Text>}
-          {!isNarrow && g.resetsAt !== undefined && <Text dimColor>↻{formatReset(g.resetsAt, now)}</Text>}
-          {note && <Text color={color}>{note}</Text>}
+        <Box paddingX={1} columnGap={1} flexWrap="wrap" alignItems="center">
+          {chips}
+          {columns >= 150 && (
+            <Box flexGrow={1} justifyContent="flex-end">
+              <Text dimColor>/{COMMAND} for details</Text>
+            </Box>
+          )}
         </Box>
       )
     }
 
-    const figure = (label: string, value: string) => (
-      <Box gap={1}>
-        <Text dimColor>{label}</Text>
-        <Text>{value}</Text>
-      </Box>
-    )
+    if (style === 'ledger') {
+      const line = (
+        <Box columnGap={2} flexWrap="wrap">
+          {gauges.map(g => {
+            const note = noteOf(g)
 
-    const ctx = view.contextPercent
-    const ctxLevel: Level = ctx === undefined ? 'calm' : ctx >= 90 ? 'hot' : ctx >= 75 ? 'warm' : 'calm'
+            return (
+              <Box gap={1}>
+                <Text color={toneOf(g.level)} dimColor={g.level === 'calm'}>
+                  {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
+                </Text>
+                <Text bold color={toneOf(g.level)}>
+                  {amount(g)}
+                </Text>
+                {isMoney(g) && (
+                  <Text dimColor>
+                    of {formatUsd(g.limitUsd!)} · {percentLabel(g.percent)}
+                  </Text>
+                )}
+                {!isNarrow && g.resetsAt !== undefined && <Text dimColor>resets {formatReset(g.resetsAt, now)}</Text>}
+                {note && <Text color={tone(g.level === 'calm' ? 'warm' : g.level)}>{note}</Text>}
+              </Box>
+            )
+          })}
+          <Box flexGrow={1} />
+          {figures.map(f => (
+            <Box gap={1}>
+              <Text dimColor>{f.label}</Text>
+              <Text bold>{f.value}</Text>
+            </Box>
+          ))}
+          {ctx !== undefined && (
+            <Box gap={1}>
+              <Text dimColor>ctx</Text>
+              <Text bold color={toneOf(ctxLevel)}>
+                {Math.round(ctx)}%
+              </Text>
+            </Box>
+          )}
+        </Box>
+      )
+      if (isNarrow || gauges.length === 0) return <Box paddingX={1}>{line}</Box>
+
+      let rule
+      if (Svg) {
+        const width = Math.round((columns - 2) * 8)
+        const source = ruleSvg(
+          gauges.map(g => ({ percent: g.percent, pace: g.pace, color: tone(g.level), title: titleOf(g) })),
+          width,
+        )
+        // No width of its own: the rule takes the markup's, up to the band's.
+        rule = svg(source, gauges.map(titleOf).join('; '), undefined, 7)
+      } else {
+        const gap = 2
+        const each = Math.max(4, Math.floor((columns - 2 - gap * (gauges.length - 1)) / gauges.length))
+        rule = (
+          <Box gap={gap}>
+            {gauges.map(g => cellBar(g.percent, each, g.pace, tone(g.level), '▔'))}
+          </Box>
+        )
+      }
+
+      return (
+        <Box paddingX={1} flexDirection="column">
+          {line}
+          {rule}
+        </Box>
+      )
+    }
+
+    // pulse
+    const spend = await read($, spendAtom)
+    const days = (spend?.days ?? []).slice(-8).map(d => d.usd)
+    const motion = (id: string, percent: number, isHot: boolean) => {
+      const key = `${e.surface}:${id}`
+      const from = drawnPercent.get(key) ?? 0
+      drawnPercent.set(key, percent)
+
+      return { from, isHot }
+    }
+    const meter = (id: string, percent: number, pace: number | undefined, level: Level, title: string, color: string, width: number) => {
+      if (isNarrow) return undefined
+      if (Svg) return svg(barSvg({ percent, pace, width, color, title, motion: motion(id, percent, level === 'hot') }), title, width, 14)
+      const { fill, rest } = smoothBar(percent, Math.round(width / 12))
+
+      return (
+        <Text>
+          <Text color={color}>{fill}</Text>
+          <Text color={COLOR.track}>{rest}</Text>
+        </Text>
+      )
+    }
+    const working = e.props.isWorking
+    const dot = () => {
+      if (!working) return undefined
+      if (Svg) return svg(liveDotSvg(tone('calm')), 'A turn is running', 12, 12)
+
+      return <Text color={COLOR.calm}>{PULSE_FRAMES[pulseFrame % PULSE_FRAMES.length]}</Text>
+    }
 
     return (
-      <Box paddingX={1} columnGap={isNarrow ? 1 : 2} flexWrap="wrap">
-        {view.windows.map(g => gauge(g, barWidth))}
-        {view.spend && gauge(view.spend, isNarrow ? barWidth : barWidth + 4)}
-        {view.monthUsd !== undefined &&
-          figure('month', `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`)}
-        {view.todayUsd !== undefined && figure('today', formatUsd(view.todayUsd))}
-        {view.sessionUsd !== undefined &&
-          (view.isApiMode ? figure('session', formatUsd(view.sessionUsd)) : <Text>{formatUsd(view.sessionUsd)}</Text>)}
+      <Box paddingX={1} columnGap={2} flexWrap="wrap" alignItems="center">
+        {gauges.map(g => {
+          const note = noteOf(g)
+
+          return (
+            <Box gap={1} alignItems="center">
+              <Text color={toneOf(g.level)} dimColor={g.level === 'calm'}>
+                {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
+              </Text>
+              {meter(g.id, g.percent, g.pace, g.level, titleOf(g), tone(g.level), g === view.spend ? 132 : 108)}
+              <Text bold color={toneOf(g.level)}>
+                {amount(g)}
+              </Text>
+              {isMoney(g) && <Text dimColor>/ {formatUsd(g.limitUsd!)}</Text>}
+              {!isNarrow && g.resetsAt !== undefined && <Text dimColor>↻ {formatReset(g.resetsAt, now)}</Text>}
+              {note && <Text color={tone(g.level === 'calm' ? 'warm' : g.level)}>{note}</Text>}
+            </Box>
+          )
+        })}
+        {figures.map(f => (
+          <Box gap={1} alignItems="center">
+            {f.isSession && dot()}
+            <Text dimColor>{f.label}</Text>
+            {f.label === 'today' && Svg && !isNarrow && days.length > 1
+              ? svg(sparkSvg(days, tone('calm'), 'Spend by day'), 'Spend by day', 44, 16)
+              : undefined}
+            <Text bold>{f.value}</Text>
+          </Box>
+        ))}
+        {figures.every(f => !f.isSession) && dot()}
         {ctx !== undefined && (
-          <Box gap={1}>
+          <Box gap={1} alignItems="center">
             <Text dimColor>ctx</Text>
-            {!isNarrow && bar(ctx, 6, undefined, ctxLevel === 'calm' ? COLOR.ctx : COLOR[ctxLevel])}
-            <Text bold color={ctxLevel === 'calm' ? undefined : COLOR[ctxLevel]}>
+            {meter('context', ctx, undefined, ctxLevel, `context ${Math.round(ctx)}% full`, ctxColor, 60)}
+            <Text bold color={toneOf(ctxLevel)}>
               {Math.round(ctx)}%
             </Text>
-          </Box>
-        )}
-        {columns >= 150 && (
-          <Box flexGrow={1} justifyContent="flex-end">
-            <Text dimColor>/{COMMAND} for details</Text>
           </Box>
         )}
       </Box>

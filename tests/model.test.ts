@@ -13,11 +13,15 @@ import {
   gaugeNote,
   HOUR,
   MINUTE,
+  parseStyle,
+  percentLabel,
   periodBounds,
+  smoothBar,
   sparkline,
   statusText,
   windowGauge,
 } from '../hooks/model'
+import { barSvg, liveDotSvg, ruleSvg } from '../hooks/svg'
 import type { Snapshot } from '../types'
 
 const NOW = new Date(2026, 9, 14, 15, 0, 0).getTime() // Wed Oct 14, 3pm local
@@ -288,5 +292,53 @@ describe('formatting', () => {
     const alerts = crossedAlerts(view, NOW)
     expect(alerts.map(a => a.key.split(':')[2])).toEqual(['80', '95'])
     expect(alerts[1]?.text).toBe('5-hour window at 95%, resets in 20m')
+  })
+})
+
+describe('styles', () => {
+  test('style names parse in any case, others are refused', () => {
+    expect(parseStyle('Pulse')).toBe('pulse')
+    expect(parseStyle('ledger')).toBe('ledger')
+    expect(parseStyle('fancy')).toBeUndefined()
+  })
+
+  test('small percentages never read as 0%', () => {
+    expect(percentLabel(0)).toBe('0%')
+    expect(percentLabel(0.066)).toBe('<0.1%')
+    expect(percentLabel(0.14)).toBe('0.1%')
+    expect(percentLabel(62.4)).toBe('62%')
+  })
+
+  test('the smooth bar shows a sliver for any spend', () => {
+    expect(smoothBar(0.07, 10)).toEqual({ fill: '▏', rest: '░'.repeat(9) })
+    expect(smoothBar(50, 4)).toEqual({ fill: '██', rest: '░░' })
+    expect(smoothBar(0, 4)).toEqual({ fill: '', rest: '░░░░' })
+  })
+
+  test('an SVG bar keeps a sliver of fill and escapes its title', () => {
+    const svg = barSvg({ percent: 0.07, pace: 3, width: 84, color: '#4f9e6a', title: 'budget <0.1% & on pace' })
+    expect(svg).toContain('width="2" height="6" rx="3" fill="#4f9e6a"')
+    expect(svg).toContain('budget &#60;0.1% &#38; on pace')
+    expect(svg).not.toContain('@keyframes')
+  })
+
+  test('the pulse bar grows from where it last drew and honors reduced motion', () => {
+    const svg = barSvg({ percent: 50, width: 100, color: '#d9563f', title: 't', motion: { from: 25, isHot: true } })
+    expect(svg).toContain('scaleX(0.5)')
+    expect(svg).toContain('prefers-reduced-motion')
+    expect(svg).toContain('class="o"')
+    expect(liveDotSvg('#4f9e6a')).toContain('prefers-reduced-motion')
+  })
+
+  test('the ledger rule has one segment per gauge', () => {
+    const svg = ruleSvg(
+      [
+        { percent: 62, pace: 64, color: '#4f9e6a', title: '5h' },
+        { percent: 31, color: '#4f9e6a', title: '7d' },
+      ],
+      408,
+    )
+    expect(svg.match(/<g>/g)).toHaveLength(2)
+    expect(svg).toContain('<rect x="208" y="4" width="200" height="3"')
   })
 })

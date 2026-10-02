@@ -20,6 +20,13 @@ org ━━━━━━━━┃━━━━━ $312 / $500 ↻Nov 1   today $18.
   - cost per turn
 - **Notifications** pop up at 80%, 95% and 100% of any window or limit, once per window.
 - **Narrow terminals** (under 100 columns) drop the bars and keep the numbers.
+- **Four styles**, switched with `/usagebar style <name>`:
+  - `classic`: the thin text bars above. This is the default.
+  - `chips`: each figure in its own rounded pill. A pill turns amber or red, and a note pill appears, when a limit gets close.
+  - `ledger`: the figures as one quiet line, with a thin progress rule under them (one segment per window or cap) and the percentage written out, so `$0.33 of $500` reads `0.1%` rather than an empty bar.
+  - `pulse`: rounded bars that animate in Claude Code Desktop. They grow to new values, a sheen sweeps across them, the pace marker breathes, a red outline glows near a limit, and a dot pulses beside the session cost while a turn runs. With API pricing, `today` also gets a small chart of recent daily spend. The motion stops when your system asks for reduced motion. In a terminal the bars fill by eighths of a cell, and the dot beats while a turn runs.
+
+  On the desktop, `chips`, `ledger` and `pulse` draw their bars as SVG, so they come out solid and rounded instead of as thin lines of characters. Hover a bar for its percentage and pace.
 
 ## Where the numbers come from
 
@@ -139,6 +146,7 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `display` | `band` | `band` draws the colored line above the prompt. `status` uses the plain-text status line instead. `both` shows the two. |
+| `style` | `classic` | How the band looks: `classic`, `chips`, `ledger` or `pulse`. `/usagebar style pulse` sets it too. |
 | `show_5h`, `show_7d` | on | The 5-hour and 7-day subscription windows. |
 | `show_spend` | on | The org cap or personal budget gauge. |
 | `show_today` | on | Spend today, and this month when no cap is set. |
@@ -155,6 +163,7 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 ## Commands
 
 - `/usagebar` opens the details pane.
+- `/usagebar style <classic | chips | ledger | pulse>` changes how the band looks. With no name, it says which style is on.
 - `/usagebar status` lists the settings the mod received, what Claude Code reports, and which cap it's showing. Start here when a number looks wrong.
 - `/usagebar hide <parts>`, `/usagebar show <parts>` and `/usagebar only <parts>` choose what the bar shows. Parts are `5h`, `7d`, `spend` (or `budget`, `cap`), `today`, `session` and `context` (or `ctx`). For example, `/usagebar hide 7d context`, or `/usagebar only budget`. `/usagebar show 5h 7d spend today session context` brings everything back.
 - `/usagebar refresh` re-reads the Admin API now.
@@ -168,7 +177,7 @@ The mod has three files the engine loads:
 
 - `.claude-plugin/plugin.json`, beside `.claude-plugin/marketplace.json`, which lists this repository as the marketplace's one plugin
 - `hooks/hooks.json`
-- `hooks/register.tsx`, which pulls in `hooks/model.ts`, `hooks/ledger.ts` and `hooks/admin.ts`
+- `hooks/register.tsx`, which pulls in `hooks/model.ts`, `hooks/ledger.ts`, `hooks/admin.ts` and `hooks/svg.ts` (the desktop's bars)
 
 `types/index.d.ts` declares the values the mod keeps in `$.state`.
 

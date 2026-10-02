@@ -345,3 +345,82 @@ describe('parts of the bar', () => {
     expect(bad.text).toBe('Unknown part: weather. Usage: /usagebar hide <part>..., where a part is 5h, 7d, spend, today, session, context.')
   })
 })
+
+describe('styles', () => {
+  /** The style row beneath the plugin, remembering what was written. */
+  function styleRow(on: On) {
+    const written: Record<string, unknown> = {}
+    on('config.list', () => ({
+      value: [
+        {
+          key: 'usage-statusbar@cc-usage-statusbar.style',
+          label: 'Style',
+          kind: 'choice',
+          value: 'classic',
+          provider: { kind: 'engine' },
+          isLocked: false,
+        },
+      ] as never,
+    }))
+    on('config.set', ($, e) => {
+      written[e.key.split('.').pop()!] = e.value
+
+      return { value: e.value }
+    })
+
+    return written
+  }
+
+  test('style switches the band and refuses unknown names', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    on('command.run', () => ({ text: '' }))
+    const written = styleRow(on)
+
+    const bad = await $.command.run({ ...refresh, args: 'style fancy' })
+    expect(bad.text).toBe("Usage: /usagebar style <classic | chips | ledger | pulse>. It's classic now.")
+    expect(written).toEqual({})
+
+    const ran = await $.command.run({ ...refresh, args: 'style Ledger' })
+    expect(ran.text).toBe('The bar now draws in the ledger style.')
+    expect(written).toEqual({ style: 'ledger' })
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    expect(await ui.find({ type: 'Text', text: /▔/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  for (const style of ['chips', 'ledger', 'pulse'] as const) {
+    test(`${style} draws every figure on both surfaces, as SVG on the desktop`, { options: { style, budget_usd: 500 } }, async ($, on) => {
+      world(on, SUBSCRIPTION)
+      await $.session.measure({ ...SUBSCRIPTION, changed: ['cost'] })
+      for (const surface of ['terminal', 'desktop'] as const) {
+        const ui = await $.ui.mount({ surface, ...band(160) })
+        expect(await ui.find({ type: 'Text', text: '5h' })).toBeDefined()
+        expect(await ui.find({ type: 'Text', text: '62%' })).toBeDefined()
+        expect(await ui.find({ type: 'Text', text: 'budget' })).toBeDefined()
+        expect(await ui.find({ type: 'Text', text: '$1.82' })).toBeDefined()
+        expect(await ui.find({ type: 'Svg' }))[surface === 'desktop' ? 'toBeDefined' : 'toBeUndefined']()
+        await ui.unmount()
+      }
+    })
+  }
+
+  test('pulse shows a live dot while a turn runs', { options: { style: 'pulse' } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    const working = band(160)
+    const ui = await $.ui.mount({ surface: 'desktop', ...working, props: { ...working.props, isWorking: true } })
+    const dots = (svgs: { props: Record<string, unknown> }[]) => svgs.filter(s => s.props.alt === 'A turn is running')
+    expect(dots(await ui.findAll({ type: 'Svg' }))).toHaveLength(1)
+    await ui.unmount()
+    const idle = await $.ui.mount({ surface: 'desktop', ...band(160) })
+    expect(dots(await idle.findAll({ type: 'Svg' }))).toHaveLength(0)
+    await idle.unmount()
+  })
+
+  test('chips draw each figure in a rounded box', { options: { style: 'chips' } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
+    const boxes = await ui.findAll({ type: 'Box' })
+    expect(boxes.filter(b => b.props.borderStyle === 'round').length).toBeGreaterThan(3)
+    await ui.unmount()
+  })
+})
