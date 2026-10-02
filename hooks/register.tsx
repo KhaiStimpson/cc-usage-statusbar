@@ -151,14 +151,14 @@ function pulseTicker($: EngineInterface, isOn: boolean) {
 let cacheAt: number | undefined
 let cacheTimer: Timer | undefined
 
-/** Redraws the band as the cache countdown moves: every second near the end, every 5 s before. */
+/** Redraws the band as the cache countdown moves: every second near the end, every 10 s before. */
 async function tickCache($: EngineInterface) {
   if (!isBand || !settings.shown.cache || cacheAt === undefined) return
   const now = await $.clock.now()
   // A lapsed cache has been drawn red already; it only changes with the next response.
   if (now - (cacheAt + settings.cacheTtlMs) > 2000) return
   const state = cacheState(cacheAt, settings.cacheTtlMs, now)
-  if (state.level !== 'calm' || Math.floor(state.remainingMs / 1000) % 5 === 0) $.ui.invalidate('ui.render')
+  if (state.level !== 'calm' || Math.floor(state.remainingMs / 1000) % 10 === 0) $.ui.invalidate('ui.render')
 }
 
 function adminFetch($: EngineInterface): AdminFetch {
@@ -614,8 +614,10 @@ export const register: Register = (on, options) => {
         </Box>
       )
     }
-    const svg = (source: string, alt: string, width: number | undefined, height: number) =>
-      Svg ? <Svg source={source} alt={alt} width={width} height={height} isInteractive /> : undefined
+    // Interactive drawings sit in a frame that reloads whenever its markup changes, which flashes; the cache
+    // countdown's bar changes often, so it is a plain image (no hover title) instead.
+    const svg = (source: string, alt: string, width: number | undefined, height: number, isInteractive = true) =>
+      Svg ? <Svg source={source} alt={alt} width={width} height={height} isInteractive={isInteractive} /> : undefined
 
     if (style === 'chips') {
       const chip = (level: Level, children: RenderChildren[]) => (
@@ -630,11 +632,11 @@ export const register: Register = (on, options) => {
           {children}
         </Box>
       )
-      const meter = (percent: number, pace: number | undefined, title: string, color: string) =>
+      const meter = (percent: number, pace: number | undefined, title: string, color: string, isInteractive = true) =>
         isNarrow
           ? undefined
           : Svg
-            ? svg(barSvg({ percent, pace, width: 72, color, title }), title, 72, 14)
+            ? svg(barSvg({ percent, pace, width: 72, color, title }), title, 72, 14, isInteractive)
             : cellBar(percent, barWidth, pace, color)
       // Only a loud gauge earns a chip, so a chip always means "look here".
       const items = gauges.map(g =>
@@ -658,7 +660,7 @@ export const register: Register = (on, options) => {
           ) : cache.level === 'hot' ? (
             chip('hot', [cacheLabel, cacheValue])
           ) : (
-            chip('warm', [cacheLabel, meter(snap(cache.percent, 72), undefined, cacheTitle, tone('warm')), cacheValue, cacheNote])
+            chip('warm', [cacheLabel, meter(snap(cache.percent, 24), undefined, cacheTitle, tone('warm'), false), cacheValue, cacheNote])
           ),
         )
       }
@@ -735,7 +737,7 @@ export const register: Register = (on, options) => {
         ...(cache
           ? [
               {
-                percent: cache.level === 'hot' ? 100 : snap(cache.percent, 120),
+                percent: cache.level === 'hot' ? 100 : snap(cache.percent, 30),
                 pace: undefined,
                 color: isLoud(cache.level) ? tone(cache.level) : quiet,
                 title: cacheTitle,
@@ -798,7 +800,7 @@ export const register: Register = (on, options) => {
           motion: isStatic ? undefined : motion(id, percent, level === 'hot'),
         })
 
-        return svg(source, title, width, 14)
+        return svg(source, title, width, 14, !isStatic)
       }
       if (isThin) return <Text color={percent > 0 ? color : COLOR.track}>{levelGlyph(percent)}</Text>
       const { fill, rest } = smoothBar(percent, Math.round(width / 12))
@@ -840,7 +842,7 @@ export const register: Register = (on, options) => {
               {cacheLabel}
               {meter(
                 'cache',
-                snap(cache.percent, cacheWidth),
+                snap(cache.percent, isLoud(cache.level) ? 24 : cacheWidth),
                 undefined,
                 cache.level,
                 cacheTitle,
