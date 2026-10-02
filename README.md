@@ -132,7 +132,7 @@ The Admin API key is the exception: don't put it in `settings.json`. Either ente
 | --- | --- | --- |
 | `display` | `band` | `band` draws the colored line above the prompt. `status` uses the plain-text status line instead. `both` shows the two. |
 | `budget_usd` | `0` | Your own dollar limit. `0` is off. `/usagebar budget 200` sets it too. |
-| `budget_period` | `monthly` | `monthly`, `weekly` (from Monday) or `daily`. |
+| `budget_period` | `monthly` | `monthly`, `weekly` (from Monday) or `daily`. `/usagebar period weekly` sets it too. |
 | `org_limit_usd` | `0` | Your org's monthly spend cap in dollars. With a gateway that enforces it, it turns the gateway's percentage into dollars. Without one, it's compared with Claude Code's spend on this machine and shown as `org ≈$312 / $500`. |
 | `admin_api_key` | — | An `sk-ant-admin…` key. Set it in `/plugin configure` or as `ANTHROPIC_ADMIN_KEY`, never in `settings.json`. |
 | `admin_user` | — | Enterprise: your `user_…` ID or email, to read your own effective limit. Leave it empty on a Console org. |
@@ -144,7 +144,8 @@ The Admin API key is the exception: don't put it in `settings.json`. Either ente
 - `/usagebar` opens the details pane.
 - `/usagebar status` lists the settings the mod received, what Claude Code reports, and which cap it's showing. Start here when a number looks wrong.
 - `/usagebar refresh` re-reads the Admin API now.
-- `/usagebar budget <usd>` sets your personal budget (`0` turns it off).
+- `/usagebar budget <usd> [monthly | weekly | daily]` sets your personal budget, and its period if you name one (`0` turns the budget off).
+- `/usagebar period <monthly | weekly | daily>` changes when the budget resets. Weeks start Monday. `month`, `week` and `day` work too.
 - `/usagebar close` closes the pane.
 
 ## Development

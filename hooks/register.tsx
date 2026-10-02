@@ -206,6 +206,28 @@ async function absorb($: EngineInterface, usage: Pick<SessionUsage, 'context' | 
   await publish($)
 }
 
+const PERIOD_WORDS: Record<string, Period> = {
+  monthly: 'monthly',
+  month: 'monthly',
+  weekly: 'weekly',
+  week: 'weekly',
+  daily: 'daily',
+  day: 'daily',
+}
+
+export function parsePeriod(word: string): Period | undefined {
+  return PERIOD_WORDS[word.toLowerCase()]
+}
+
+/** Writes one of this plugin's /config rows; resolves the refusal, if any. */
+async function setOption($: EngineInterface, field: string, value: string | number): Promise<string | undefined> {
+  const row = (await $.config.list()).find(r => r.key.startsWith('usage-statusbar') && r.key.endsWith(`.${field}`))
+  if (!row) return `no /config row for ${field}; set it with /plugin configure`
+  const { deny } = await $.config.set({ key: row.key, value })
+
+  return deny
+}
+
 /** What the mod received and where each figure comes from, for /usagebar status. */
 async function statusReport($: EngineInterface): Promise<string> {
   const now = await $.clock.now()
@@ -264,7 +286,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: COMMAND,
       description: 'Usage details pane: windows, spend, forecast and cost per turn',
-      argumentHint: '[status | refresh | budget <usd> | close]',
+      argumentHint: '[status | refresh | budget <usd> [period] | period <monthly|weekly|daily> | close]',
     })
 
     const sessionId = await $.session.id()
@@ -323,7 +345,7 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: COMMAND }, async ($, e) => {
-    const [verb = '', arg = ''] = e.args.trim().split(/\s+/)
+    const [verb = '', arg = '', rest = ''] = e.args.trim().toLowerCase().split(/\s+/)
     if (verb === 'close') {
       await $.ui.close({ id: PANE })
 
@@ -338,12 +360,24 @@ export const register: Register = (on, options) => {
     }
     if (verb === 'budget') {
       const usd = Number(arg.replace(/^\$/, ''))
-      if (!Number.isFinite(usd) || usd < 0) return { text: `Usage: /${COMMAND} budget <usd>, 0 to turn it off.` }
-      const row = (await $.config.list()).find(r => r.key.endsWith('.budget_usd') && r.key.startsWith('usage-statusbar'))
-      if (!row) return { text: 'Set budget_usd for usage-statusbar in /config.' }
-      const { deny } = await $.config.set({ key: row.key, value: usd })
+      const period = rest ? parsePeriod(rest) : undefined
+      if (!arg || !Number.isFinite(usd) || usd < 0 || (rest && !period)) {
+        return { text: `Usage: /${COMMAND} budget <usd> [monthly | weekly | daily], 0 to turn it off.` }
+      }
+      const denied = (await setOption($, 'budget_usd', usd)) ?? (period ? await setOption($, 'budget_period', period) : undefined)
+      if (denied) return { text: `Could not set the budget: ${denied}` }
 
-      return { text: deny ? `Could not set the budget: ${deny}` : usd > 0 ? `Budget set to ${formatUsd(usd)} ${settings.budgetPeriod}.` : 'Budget turned off.' }
+      return { text: usd > 0 ? `Budget set to ${formatUsd(usd)} ${period ?? settings.budgetPeriod}.` : 'Budget turned off.' }
+    }
+    if (verb === 'period') {
+      const period = parsePeriod(arg)
+      if (!period) return { text: `Usage: /${COMMAND} period <monthly | weekly | daily>. It's ${settings.budgetPeriod} now.` }
+      const denied = await setOption($, 'budget_period', period)
+      if (denied) return { text: `Could not set the budget period: ${denied}` }
+
+      return {
+        text: `Budget period set to ${period}${period === 'weekly' ? ' (weeks start Monday)' : ''}.${settings.budgetUsd > 0 ? '' : ` Set an amount with /${COMMAND} budget <usd>.`}`,
+      }
     }
     if (verb === 'status') return { text: await statusReport($) }
     const opened = await $.ui.open({ id: PANE, title: 'Usage' })

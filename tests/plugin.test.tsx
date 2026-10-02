@@ -225,3 +225,56 @@ describe('status command', () => {
     await ui.unmount()
   })
 })
+
+describe('budget commands', () => {
+  /** The /config rows beneath the plugin, remembering what was written. */
+  function config(on: On) {
+    const written: Record<string, unknown> = {}
+    const row = (field: string, kind: 'number' | 'choice') => ({
+      key: `usage-statusbar@cc-usage-statusbar.${field}`,
+      label: field,
+      kind,
+      value: 0,
+      provider: { kind: 'engine' },
+      isLocked: false,
+    })
+    on('config.list', () => ({ value: [row('budget_usd', 'number'), row('budget_period', 'choice')] as never }))
+    on('config.set', ($, e) => {
+      written[e.key.split('.').pop()!] = e.value
+
+      return { value: e.value }
+    })
+
+    return written
+  }
+
+  test('period sets the budget period, taking short words too', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    on('command.run', () => ({ text: '' }))
+    const written = config(on)
+
+    const ran = await $.command.run({ ...refresh, args: 'period Week' })
+    expect(ran.text).toBe('Budget period set to weekly (weeks start Monday). Set an amount with /usagebar budget <usd>.')
+    expect(written).toEqual({ budget_period: 'weekly' })
+  })
+
+  test('period refuses anything else and says the current one', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    on('command.run', () => ({ text: '' }))
+    const written = config(on)
+
+    const ran = await $.command.run({ ...refresh, args: 'period yearly' })
+    expect(ran.text).toBe("Usage: /usagebar period <monthly | weekly | daily>. It's monthly now.")
+    expect(written).toEqual({})
+  })
+
+  test('budget takes an amount and a period together', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    on('command.run', () => ({ text: '' }))
+    const written = config(on)
+
+    const ran = await $.command.run({ ...refresh, args: 'budget $50 daily' })
+    expect(ran.text).toBe('Budget set to $50.00 daily.')
+    expect(written).toEqual({ budget_usd: 50, budget_period: 'daily' })
+  })
+})
