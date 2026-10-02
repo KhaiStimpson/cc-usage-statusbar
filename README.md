@@ -120,6 +120,14 @@ The Admin API key is the exception: don't put it in `settings.json`. Either ente
 "options": { "admin_workspace_id": "wrkspc_01AbCdEf", "admin_poll_minutes": 10 }
 ```
 
+**Only the budget on the bar:**
+
+```json
+"options": { "budget_usd": 200, "show_5h": false, "show_7d": false, "show_session": false, "show_context": false }
+```
+
+Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pane, and notifications still fire for them.
+
 **Plain-text status line instead of the colored row:**
 
 ```json
@@ -131,6 +139,11 @@ The Admin API key is the exception: don't put it in `settings.json`. Either ente
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `display` | `band` | `band` draws the colored line above the prompt. `status` uses the plain-text status line instead. `both` shows the two. |
+| `show_5h`, `show_7d` | on | The 5-hour and 7-day subscription windows. |
+| `show_spend` | on | The org cap or personal budget gauge. |
+| `show_today` | on | Spend today, and this month when no cap is set. |
+| `show_session` | on | What this session has cost. |
+| `show_context` | on | How full the context window is. |
 | `budget_usd` | `0` | Your own dollar limit. `0` is off. `/usagebar budget 200` sets it too. |
 | `budget_period` | `monthly` | `monthly`, `weekly` (from Monday) or `daily`. `/usagebar period weekly` sets it too. |
 | `org_limit_usd` | `0` | Your org's monthly spend cap in dollars. With a gateway that enforces it, it turns the gateway's percentage into dollars. Without one, it's compared with Claude Code's spend on this machine and shown as `org ≈$312 / $500`. |
@@ -143,6 +156,7 @@ The Admin API key is the exception: don't put it in `settings.json`. Either ente
 
 - `/usagebar` opens the details pane.
 - `/usagebar status` lists the settings the mod received, what Claude Code reports, and which cap it's showing. Start here when a number looks wrong.
+- `/usagebar hide <parts>`, `/usagebar show <parts>` and `/usagebar only <parts>` choose what the bar shows. Parts are `5h`, `7d`, `spend` (or `budget`, `cap`), `today`, `session` and `context` (or `ctx`). For example, `/usagebar hide 7d context`, or `/usagebar only budget`. `/usagebar show 5h 7d spend today session context` brings everything back.
 - `/usagebar refresh` re-reads the Admin API now.
 - `/usagebar budget <usd> [monthly | weekly | daily]` sets your personal budget, and its period if you name one (`0` turns the budget off).
 - `/usagebar period <monthly | weekly | daily>` changes when the budget resets. Weeks start Monday. `month`, `week` and `day` work too.

@@ -278,3 +278,70 @@ describe('budget commands', () => {
     expect(written).toEqual({ budget_usd: 50, budget_period: 'daily' })
   })
 })
+
+describe('parts of the bar', () => {
+  test('hidden parts leave the bar, the rest stay', { options: { show_7d: false, show_context: false } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const ui = await $.ui.mount({ surface, ...band(160) })
+      expect(await ui.find({ type: 'Text', text: '62%' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: '7d' })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: 'ctx' })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: '$1.82' })).toBeDefined()
+      await ui.unmount()
+    }
+  })
+
+  test(
+    'the budget alone',
+    { options: { budget_usd: 200, show_5h: false, show_7d: false, show_session: false, show_context: false } },
+    async ($, on) => {
+      world(on, SUBSCRIPTION)
+      await $.session.measure({ ...SUBSCRIPTION, changed: ['cost'] })
+      const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+      expect(await ui.find({ type: 'Text', text: 'budget' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: '/ $200' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: '5h' })).toBeUndefined()
+      expect(await ui.find({ type: 'Text', text: /^\$1\.82$/ })).toBeUndefined()
+      await ui.unmount()
+    },
+  )
+
+  test(
+    'everything hidden leaves the band to the engine',
+    { options: { show_5h: false, show_7d: false, show_spend: false, show_today: false, show_session: false, show_context: false } },
+    async ($, on) => {
+      world(on, SUBSCRIPTION)
+      const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+      expect(await ui.find({ type: 'Text', text: 'engine' })).toBeDefined()
+      await ui.unmount()
+    },
+  )
+
+  test('only writes every part that changes, with aliases', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    on('command.run', () => ({ text: '' }))
+    const written: Record<string, unknown> = {}
+    const rows = ['5h', '7d', 'spend', 'today', 'session', 'context'].map(part => ({
+      key: `usage-statusbar@cc-usage-statusbar.show_${part}`,
+      label: part,
+      kind: 'boolean' as const,
+      value: true,
+      provider: { kind: 'engine' },
+      isLocked: false,
+    }))
+    on('config.list', () => ({ value: rows as never }))
+    on('config.set', ($, e) => {
+      written[e.key.split('.').pop()!] = e.value
+
+      return { value: e.value }
+    })
+
+    const ran = await $.command.run({ ...refresh, args: 'only budget' })
+    expect(ran.text).toBe('The bar shows: spend.')
+    expect(written).toEqual({ show_5h: false, show_7d: false, show_today: false, show_session: false, show_context: false })
+
+    const bad = await $.command.run({ ...refresh, args: 'hide weather' })
+    expect(bad.text).toBe('Unknown part: weather. Usage: /usagebar hide <part>..., where a part is 5h, 7d, spend, today, session, context.')
+  })
+})

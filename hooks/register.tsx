@@ -18,10 +18,13 @@ import {
   gaugeNote,
   hitsFullIn,
   MINUTE,
+  parsePart,
+  PARTS,
   sparkline,
   statusText,
+  visibleView,
 } from './model'
-import type { Gauge, Options, View } from './model'
+import type { Gauge, Options, Part, Shown, View } from './model'
 
 const PANE = 'usage-statusbar'
 const COMMAND = 'usagebar'
@@ -50,6 +53,7 @@ type Settings = Options & {
   adminUser: string
   adminWorkspaceId: string
   pollMinutes: number
+  shown: Shown
 }
 
 function readSettings(options: Readonly<Record<string, unknown>>): Settings {
@@ -64,6 +68,7 @@ function readSettings(options: Readonly<Record<string, unknown>>): Settings {
     adminUser: String(options.admin_user ?? '').trim(),
     adminWorkspaceId: String(options.admin_workspace_id ?? '').trim(),
     pollMinutes: Math.max(1, Number(options.admin_poll_minutes ?? 5) || 5),
+    shown: Object.fromEntries(PARTS.map(part => [part, options[`show_${part}`] !== false])) as Shown,
   }
 }
 
@@ -157,7 +162,7 @@ async function publish($: EngineInterface) {
   const now = await $.clock.now()
   const view = await currentView($, now)
   const rate = burnRate(await read($, historyAtom), now)
-  if (isStatus) $.ui.status(statusText(view, rate, now))
+  if (isStatus) $.ui.status(statusText(visibleView(view, settings.shown), rate, now))
 
   const fired = new Set(await read($, alertsAtom))
   const fresh = crossedAlerts(view, now).filter(a => !fired.has(a.key))
@@ -220,7 +225,7 @@ export function parsePeriod(word: string): Period | undefined {
 }
 
 /** Writes one of this plugin's /config rows; resolves the refusal, if any. */
-async function setOption($: EngineInterface, field: string, value: string | number): Promise<string | undefined> {
+async function setOption($: EngineInterface, field: string, value: string | number | boolean): Promise<string | undefined> {
   const row = (await $.config.list()).find(r => r.key.startsWith('usage-statusbar') && r.key.endsWith(`.${field}`))
   if (!row) return `no /config row for ${field}; set it with /plugin configure`
   const { deny } = await $.config.set({ key: row.key, value })
@@ -265,6 +270,8 @@ async function statusReport($: EngineInterface): Promise<string> {
       ? `Cap shown: ${s.label} ${s.spentUsd !== undefined && s.limitUsd !== undefined ? `${s.isEstimate ? '≈' : ''}${formatUsd(s.spentUsd)} / ${formatUsd(s.limitUsd)}` : `${s.percent}%`}${s.isEstimate ? ', counted from this machine' : ''}`
       : 'Cap shown: none. Set budget_usd or org_limit_usd, or an Admin API key.',
   )
+  const hidden = PARTS.filter(part => !settings.shown[part])
+  lines.push(hidden.length > 0 ? `Hidden on the bar: ${hidden.join(', ')}` : 'Hidden on the bar: nothing')
   if (bandColumns !== undefined) lines.push(`Band width: ${bandColumns} columns`)
 
   return lines.join('\n')
@@ -286,7 +293,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: COMMAND,
       description: 'Usage details pane: windows, spend, forecast and cost per turn',
-      argumentHint: '[status | refresh | budget <usd> [period] | period <monthly|weekly|daily> | close]',
+      argumentHint: '[status | show|hide|only <parts> | budget <usd> [period] | period <p> | refresh | close]',
     })
 
     const sessionId = await $.session.id()
@@ -369,6 +376,30 @@ export const register: Register = (on, options) => {
 
       return { text: usd > 0 ? `Budget set to ${formatUsd(usd)} ${period ?? settings.budgetPeriod}.` : 'Budget turned off.' }
     }
+    if (verb === 'show' || verb === 'hide' || verb === 'only') {
+      const words = e.args.trim().toLowerCase().split(/[\s,]+/).slice(1)
+      const parts = words.map(parsePart)
+      const unknown = words.filter((_, i) => parts[i] === undefined)
+      if (words.length === 0 || unknown.length > 0) {
+        return {
+          text: `${unknown.length > 0 ? `Unknown part: ${unknown.join(', ')}. ` : ''}Usage: /${COMMAND} ${verb} <part>..., where a part is ${PARTS.join(', ')}.`,
+        }
+      }
+      const named = new Set(parts as Part[])
+      const wanted: Shown = { ...settings.shown }
+      for (const part of PARTS) {
+        if (verb === 'only') wanted[part] = named.has(part)
+        else if (named.has(part)) wanted[part] = verb === 'show'
+      }
+      for (const part of PARTS) {
+        if (wanted[part] === settings.shown[part]) continue
+        const denied = await setOption($, `show_${part}`, wanted[part])
+        if (denied) return { text: `Could not change ${part}: ${denied}` }
+      }
+      const showing = PARTS.filter(part => wanted[part])
+
+      return { text: showing.length > 0 ? `The bar shows: ${showing.join(', ')}.` : 'Every part is hidden, so the bar is off.' }
+    }
     if (verb === 'period') {
       const period = parsePeriod(arg)
       if (!period) return { text: `Usage: /${COMMAND} period <monthly | weekly | daily>. It's ${settings.budgetPeriod} now.` }
@@ -388,7 +419,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (!isBand || e.props.hasSurvey) return next(e)
     const now = await $.clock.now()
-    const view = await currentView($, now)
+    const view = visibleView(await currentView($, now), settings.shown)
     if (!hasAnything(view)) return next(e)
     const rate = burnRate(await read($, historyAtom), now)
     const { Box, Text } = $.ui.resolve(e)

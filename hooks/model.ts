@@ -401,3 +401,42 @@ export function crossedAlerts(view: View, now: number): { key: string; text: str
 
   return out
 }
+
+/** The pieces of the bar a person can hide, each a `show_<part>` setting. */
+export const PARTS = ['5h', '7d', 'spend', 'today', 'session', 'context'] as const
+export type Part = (typeof PARTS)[number]
+export type Shown = Record<Part, boolean>
+
+const PART_WORDS: Record<string, Part> = {
+  '5h': '5h',
+  'five_hour': '5h',
+  '7d': '7d',
+  'seven_day': '7d',
+  spend: 'spend',
+  budget: 'spend',
+  cap: 'spend',
+  limit: 'spend',
+  today: 'today',
+  month: 'today',
+  session: 'session',
+  cost: 'session',
+  context: 'context',
+  ctx: 'context',
+}
+
+export function parsePart(word: string): Part | undefined {
+  return PART_WORDS[word.toLowerCase()]
+}
+
+/** The view with the hidden parts taken out; the pane and alerts keep the whole. */
+export function visibleView(view: View, shown: Shown): View {
+  return {
+    ...view,
+    windows: view.windows.filter(w => (w.id === 'five_hour' ? shown['5h'] : w.id === 'seven_day' ? shown['7d'] : true)),
+    spend: shown.spend ? view.spend : undefined,
+    monthUsd: shown.today ? view.monthUsd : undefined,
+    todayUsd: shown.today ? view.todayUsd : undefined,
+    sessionUsd: shown.session ? view.sessionUsd : undefined,
+    contextPercent: shown.context ? view.contextPercent : undefined,
+  }
+}

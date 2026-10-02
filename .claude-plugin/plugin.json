@@ -1,7 +1,7 @@
 {
   "name": "usage-statusbar",
   "displayName": "Usage Status Bar",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "A slim colored line above the prompt with your real usage: subscription windows, org spend limits, budgets, context and cost",
   "author": {
     "name": "Khai Stimpson"
@@ -19,6 +19,42 @@
         "both"
       ],
       "default": "band"
+    },
+    "show_5h": {
+      "type": "boolean",
+      "title": "Show 5-hour window",
+      "description": "The 5-hour subscription window. Off hides it from the bar; the /usagebar pane still shows it.",
+      "default": true
+    },
+    "show_7d": {
+      "type": "boolean",
+      "title": "Show 7-day window",
+      "description": "The 7-day subscription window. Off hides it from the bar; the /usagebar pane still shows it.",
+      "default": true
+    },
+    "show_spend": {
+      "type": "boolean",
+      "title": "Show spend cap",
+      "description": "The org cap or personal budget gauge. Off hides it from the bar; the /usagebar pane still shows it.",
+      "default": true
+    },
+    "show_today": {
+      "type": "boolean",
+      "title": "Show today and month spend",
+      "description": "Spend today, and this month when no cap is set (API pricing). Off hides it from the bar; the /usagebar pane still shows it.",
+      "default": true
+    },
+    "show_session": {
+      "type": "boolean",
+      "title": "Show session cost",
+      "description": "What this session has cost. Off hides it from the bar; the /usagebar pane still shows it.",
+      "default": true
+    },
+    "show_context": {
+      "type": "boolean",
+      "title": "Show context",
+      "description": "How full the context window is. Off hides it from the bar; the /usagebar pane still shows it.",
+      "default": true
     },
     "budget_usd": {
       "type": "number",
