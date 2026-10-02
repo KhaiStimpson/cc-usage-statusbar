@@ -25,7 +25,12 @@ org ██████▎░░░ $312 / $500 ahead of pace resets Nov 1   toda
   - a chart of the current 5-hour window, your burn rate, and when you'd hit 100%
   - spend per day, a forecast for the end of the period, when you'd hit the limit, and money left per day
   - cost per turn
-- **Cache countdown**: a `cache` part counts down to when the prompt cache lapses (5 minutes after the last reply, or 1 hour with `cache_ttl`). It stays a dim `cache 3:42` while there is time, goes amber with `expires soon` in the last minute (the last five on a 1-hour cache), and turns red once it has lapsed, with an estimate of what the next turn costs to re-read. It appears after the first reply. In `pulse` it is a thin bar that becomes a full amber bar near the end and a red outlined box once lapsed; in `chips` its pill fills grey, then solid amber, then solid red; in `ledger` it is a column whose bar turns amber, then solid red.
+- **Cache countdown**: a `cache` part counts down to when the prompt cache lapses, and follows what the [prompt caching docs](https://code.claude.com/docs/en/prompt-caching) say resets it.
+  - **Lifetime:** with `cache_ttl` on `auto` (the default) it is 1 hour on a subscription within its plan usage, and 5 minutes on an API key, a cloud provider, or once usage credits are billing. `CLAUDE_CODE_PROMPT_CACHE_TTL`, `FORCE_PROMPT_CACHING_5M`, `ENABLE_PROMPT_CACHING_1H` (in the environment or the settings' `env` block) and the `promptCacheTtl` setting are honoured in the docs' order, and `DISABLE_PROMPT_CACHING` hides the part. Set `cache_ttl` to `5m` or `1h` to force it.
+  - **Per model:** each model has its own cache, so the countdown follows the model you are on. After `/model` the new model reads cold at once, and switching back to a model within its lifetime reads warm again.
+  - **Compaction and `/clear`:** `/compact` leaves the cache cold, priced on the new, shorter summary. `/clear` forgets it. A reload or plugin update picks the countdown up again for the same session.
+  - **Look:** it stays a dim `cache 3m` while there is time, goes amber with `expires soon` in the last minute (the last five on a 1-hour cache), and turns red once it has lapsed, with an estimate of what the next turn costs to re-read. It appears after the first reply. In `pulse` it is a thin bar that becomes a full amber bar near the end and a red outlined box once lapsed; in `chips` its pill fills grey, then solid amber, then solid red; in `ledger` it is a column whose bar turns amber, then solid red.
+  - **Not tracked:** effort changes, fast mode's first request, MCP or plugin changes without tool search, and image trimming can also miss the cache. The plugin cannot see them coming, so the part will not warn about them.
 - **Notifications** pop up at 80%, 95% and 100% of any window or limit, once per window.
 - **Narrow bands** (under 100 terminal columns, or 70 on the desktop) drop reset times and shorten bars.
 - **Three styles**, switched with `/usagebar style <name>`:
@@ -160,7 +165,7 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 | `show_session` | on | What this session has cost. |
 | `show_context` | on | How full the context window is. |
 | `show_cache` | on | The prompt-cache countdown. |
-| `cache_ttl` | `5m` | How long the cache lasts after a reply: `5m` or `1h`. |
+| `cache_ttl` | `auto` | How long the cache lasts after a reply: `auto` (worked out from your plan and Claude Code's settings), `5m` or `1h`. |
 | `cache_write_usd_per_mtok` | `3.75` | Cache-write price per million tokens, for the re-read estimate once the cache has lapsed. `0` hides the estimate. |
 | `budget_usd` | `0` | Your own dollar limit. `0` is off. `/usagebar budget 200` sets it too. |
 | `budget_period` | `monthly` | `monthly`, `weekly` (from Monday) or `daily`. `/usagebar period weekly` sets it too. |

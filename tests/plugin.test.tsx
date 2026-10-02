@@ -38,11 +38,18 @@ function HOURS(n: number) {
 }
 
 /** The engine beneath the plugin: the clock, the store and the session's figures. */
-function world(on: On, usage: SessionUsage) {
+function world(on: On, usage: SessionUsage, stored?: Readonly<Record<string, unknown>>) {
   const clock = mock.clock(on, { now: NOW })
-  mock.store(on)
+  mock.store(on, stored)
   on('session.usage', () => ({ value: usage }))
   on('session.id', () => ({ value: 'session-1' }))
+  // The model the session runs, which a test changes to stand for a /model switch.
+  const model = { id: 'claude-sonnet-5-5' }
+  on('session.model', () => ({ value: model.id }))
+  const environment: Record<string, string> = {}
+  on('env.get', (_$, e) => ({ value: environment[e.name] }))
+  const claudeSettings: Record<string, unknown> = {}
+  on('settings.read', () => ({ value: claudeSettings }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
   const status: (string | undefined)[] = []
   const toasts: string[] = []
@@ -56,7 +63,7 @@ function world(on: On, usage: SessionUsage) {
     return <Text>engine</Text>
   })
 
-  return { status, toasts, clock }
+  return { status, toasts, clock, model, claudeSettings, environment }
 }
 
 /** A finished main-thread turn, which refreshes the prompt cache. */
@@ -434,6 +441,113 @@ describe('cache countdown', () => {
     expect(await warm.find({ type: 'Text', text: 'expires soon' })).toBeDefined()
     expect(await warm.find({ type: 'Svg', source: /class="t"[^>]*>0:45</ })).toBeDefined()
     await warm.unmount()
+  })
+
+  /** A reply on the session's model, after the plan's windows have been reported. */
+  const reply = async ($: Parameters<Parameters<typeof test>[2]>[0], usage: SessionUsage) => {
+    await $.session.measure({ ...usage, changed: ['rateLimits'] })
+    await $.turn.complete(TURN)
+  }
+  const shows = async ($: Parameters<Parameters<typeof test>[2]>[0], text: string | RegExp) => {
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    const found = await ui.find({ type: 'Text', text })
+    await ui.unmount()
+
+    return found !== undefined
+  }
+
+  test('a subscription gets the one-hour lifetime and an API key five minutes', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    engine(on)
+    await reply($, SUBSCRIPTION)
+    expect(await shows($, '60:00')).toBe(true)
+  })
+
+  test('a gateway limit is not a subscription, so five minutes', async ($, on) => {
+    world(on, GATEWAY)
+    engine(on)
+    await reply($, GATEWAY)
+    expect(await shows($, '5:00')).toBe(true)
+  })
+
+  test('a plan that is used up bills credits, so five minutes', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    engine(on)
+    const spent: SessionUsage = {
+      ...SUBSCRIPTION,
+      rateLimits: [{ kind: 'five_hour', percentUsed: 100, resetsAt: new Date(NOW + MINUTES(10)).toISOString() }],
+    }
+    await reply($, spent)
+    expect(await shows($, '5:00')).toBe(true)
+  })
+
+  test('FORCE_PROMPT_CACHING_5M and the promptCacheTtl setting outrank the plan', async ($, on) => {
+    const { environment, claudeSettings } = world(on, SUBSCRIPTION)
+    engine(on)
+    claudeSettings.promptCacheTtl = '5m'
+    await reply($, SUBSCRIPTION)
+    expect(await shows($, '5:00')).toBe(true)
+    claudeSettings.promptCacheTtl = undefined
+    environment.FORCE_PROMPT_CACHING_5M = '1'
+    await reply($, SUBSCRIPTION)
+    expect(await shows($, '5:00')).toBe(true)
+  })
+
+  test('DISABLE_PROMPT_CACHING hides the countdown', async ($, on) => {
+    const { environment } = world(on, SUBSCRIPTION)
+    engine(on)
+    environment.DISABLE_PROMPT_CACHING = '1'
+    await reply($, SUBSCRIPTION)
+    expect(await shows($, /cache/)).toBe(false)
+  })
+
+  test('each model has its own cache: a switch reads cold and switching back reads warm again', async ($, on) => {
+    const { model, clock } = world(on, SUBSCRIPTION)
+    engine(on)
+    await reply($, SUBSCRIPTION)
+    await clock.advance(MINUTES(10))
+    expect(await shows($, '50:00')).toBe(true)
+
+    model.id = 'claude-opus-5-5'
+    expect(await shows($, '⚠ cache cold')).toBe(true)
+
+    model.id = 'claude-sonnet-5-5'
+    expect(await shows($, '50:00')).toBe(true)
+  })
+
+  test('a compaction leaves the cache cold, priced on the short summary', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    engine(on)
+    on('session.compact', () => ({ messages: [{ role: 'assistant', text: 'summary', toolUses: [] }], tokensAfter: 8000 }))
+    await reply($, SUBSCRIPTION)
+    const compacted = await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'hi', toolUses: [] }] })
+    expect(compacted).toBeDefined()
+    expect(await shows($, '⚠ cache cold')).toBe(true)
+    // 8,000 tokens at $3.75 per million.
+    expect(await shows($, 'next turn ≈ $0.03')).toBe(true)
+    // The next reply rebuilds it.
+    await $.turn.complete(TURN)
+    expect(await shows($, '⚠ cache cold')).toBe(false)
+  })
+
+  test('a /clear forgets the cache', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    engine(on)
+    on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+    await reply($, SUBSCRIPTION)
+    expect(await shows($, /cache/)).toBe(true)
+    await $.session.end({ reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } as never })
+    expect(await shows($, /cache/)).toBe(false)
+  })
+
+  test('a reload picks the countdown up again from the store, for the same session only', async ($, on) => {
+    world(on, SUBSCRIPTION, { cache: { sessionId: 'session-1', entries: [['claude-sonnet-5-5', NOW - MINUTES(1)]] } })
+    engine(on)
+    on('command.register', () => ({ value: undefined }))
+    on('session.start', (_$, e) => ({ cwd: e.cwd }))
+    await $.session.start({ cwd: 'C:/work', surface: 'terminal', isInteractive: true })
+    // A subscription's hour, less the minute since the last reply.
+    expect(await shows($, '59:00')).toBe(true)
   })
 
   test('a one-hour cache lasts an hour', { options: { cache_ttl: '1h' } }, async ($, on) => {

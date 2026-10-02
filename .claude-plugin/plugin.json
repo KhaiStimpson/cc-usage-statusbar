@@ -70,18 +70,19 @@
     "show_cache": {
       "type": "boolean",
       "title": "Show cache countdown",
-      "description": "A countdown to when the prompt cache lapses. Amber in the last minute, red once it has, with what the next turn will cost to re-read. Appears after the first reply.",
+      "description": "A countdown to when the prompt cache lapses, kept per model. Amber near the end, red once it has lapsed, after a model switch or after a compaction, with what the next turn will cost to re-read. Appears after the first reply.",
       "default": true
     },
     "cache_ttl": {
       "type": "string",
       "title": "Cache lifetime",
-      "description": "How long the prompt cache lasts after a reply: 5m is the default, 1h if your plan or setup uses the 1-hour cache.",
+      "description": "How long the prompt cache lasts after a reply. auto works it out the way Claude Code does: 1 hour on a subscription within its plan usage, 5 minutes on an API key, a provider or once usage credits are billing, with CLAUDE_CODE_PROMPT_CACHE_TTL, FORCE_PROMPT_CACHING_5M, ENABLE_PROMPT_CACHING_1H and the promptCacheTtl setting honoured. 5m or 1h forces it.",
       "options": [
+        "auto",
         "5m",
         "1h"
       ],
-      "default": "5m"
+      "default": "auto"
     },
     "cache_write_usd_per_mtok": {
       "type": "number",

@@ -21,21 +21,23 @@ import {
   formatReset,
   formatUsd,
   gaugeNote,
+  HOUR,
   hitsFullIn,
   levelGlyph,
   MINUTE,
-  parseCacheTtl,
+  parseCacheTtlSetting,
   parsePart,
   parseStyle,
   PARTS,
   percentLabel,
+  resolveCacheTtl,
   smoothBar,
   sparkline,
   statusText,
   STYLES,
   visibleView,
 } from './model'
-import type { Gauge, Options, Part, Shown, Style, View } from './model'
+import type { CacheState, CacheTtlSetting, Gauge, Options, Part, Shown, Style, View } from './model'
 import type { PillPart } from './svg'
 import { barSvg, cacheClockSvg, liveDotSvg, pillSvg, ruleSvg, sparkSvg, SVG_COLOR, SVG_QUIET } from './svg'
 
@@ -69,7 +71,7 @@ type Settings = Options & {
   adminWorkspaceId: string
   pollMinutes: number
   shown: Shown
-  cacheTtlMs: number
+  cacheTtl: CacheTtlSetting
   cacheWriteUsd: number
 }
 
@@ -90,7 +92,7 @@ function readSettings(options: Readonly<Record<string, unknown>>): Settings {
     adminWorkspaceId: String(options.admin_workspace_id ?? '').trim(),
     pollMinutes: Math.max(1, Number(options.admin_poll_minutes ?? 5) || 5),
     shown: Object.fromEntries(PARTS.map(part => [part, options[`show_${part}`] !== false])) as Shown,
-    cacheTtlMs: CACHE_TTL[parseCacheTtl(String(options.cache_ttl ?? '5m'))],
+    cacheTtl: parseCacheTtlSetting(String(options.cache_ttl ?? 'auto')),
     cacheWriteUsd: Number.isFinite(cacheWrite) && cacheWrite >= 0 ? cacheWrite : DEFAULT_CACHE_WRITE_USD,
   }
 }
@@ -149,24 +151,106 @@ function pulseTicker($: EngineInterface, isOn: boolean) {
   }
 }
 
-// The cache countdown: when the last main-thread response went out, which refreshes the cache entry.
-let cacheAt: number | undefined
+// The prompt cache is per model, so each model's last response time is kept apart. Nothing is known (and the
+// band shows nothing) until the first reply; once something is, a model with no entry reads as cold.
+let cacheEntries = new Map<string, number>()
+// Set by a compaction: the conversation was rewritten, so the next turn re-reads the (short) summary.
+let cacheColdReason: 'compacted' | undefined
+let cacheColdTokens: number | undefined
+// How long an entry lasts, and why; resolved from the plan, the environment and Claude Code's settings.
+let cacheTtlMs = CACHE_TTL['5m']
+let cacheTtlSource = 'default'
+let isCacheDisabled = false
 let cacheTimer: Timer | undefined
 
+const COLD: CacheState = { level: 'hot', remainingMs: 0, percent: 0 }
+
+/** The cache as the band shows it for `model`, or nothing when no reply has told us anything yet. */
+function cacheView(model: string, now: number): { state: CacheState; reason?: string } | undefined {
+  if (!settings.shown.cache || isCacheDisabled) return undefined
+  const at = cacheEntries.get(model)
+  if (at !== undefined) return { state: cacheState(at, cacheTtlMs, now) }
+  if (cacheColdReason === 'compacted') return { state: COLD, reason: 'compacted' }
+  if (cacheEntries.size > 0) return { state: COLD, reason: 'switched' }
+
+  return undefined
+}
+
+/** Reads the environment, Claude Code's settings and the plan to work out the cache lifetime. */
+async function refreshCacheTtl($: EngineInterface) {
+  const env = ((await $.settings.read({}).catch(() => ({}))) as { env?: Record<string, unknown>; promptCacheTtl?: unknown }) ?? {}
+  // The process environment, then the settings' env block; $.env.get names each variable literally.
+  const variable = (value: string | undefined, name: string) => {
+    const found = value ?? env.env?.[name]
+
+    return found === undefined || found === null ? '' : String(found).trim()
+  }
+  isCacheDisabled = variable(await $.env.get('DISABLE_PROMPT_CACHING'), 'DISABLE_PROMPT_CACHING') === '1'
+  const snapshot = await read($, snapshotAtom)
+  const { ttl, source } = resolveCacheTtl({
+    setting: settings.cacheTtl,
+    isForced5m: variable(await $.env.get('FORCE_PROMPT_CACHING_5M'), 'FORCE_PROMPT_CACHING_5M') === '1',
+    envTtl: variable(await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'), 'CLAUDE_CODE_PROMPT_CACHE_TTL') || undefined,
+    settingsTtl: typeof env.promptCacheTtl === 'string' ? env.promptCacheTtl : undefined,
+    isEnabled1h: variable(await $.env.get('ENABLE_PROMPT_CACHING_1H'), 'ENABLE_PROMPT_CACHING_1H') === '1',
+    windows: snapshot?.windows.map(w => ({ kind: w.kind, percentUsed: w.percentUsed })) ?? [],
+  })
+  cacheTtlMs = CACHE_TTL[ttl]
+  cacheTtlSource = source
+}
+
+async function saveCache($: EngineInterface) {
+  await $.store.set('cache', {
+    sessionId: await $.session.id(),
+    entries: [...cacheEntries],
+    coldReason: cacheColdReason,
+    coldTokens: cacheColdTokens,
+  })
+}
+
+function isSavedCache(
+  value: unknown,
+): value is { sessionId: string; entries: [string, number][]; coldReason?: 'compacted'; coldTokens?: number } {
+  const v = value as { sessionId?: unknown; entries?: unknown } | null
+
+  return (
+    typeof v === 'object' &&
+    v !== null &&
+    typeof v.sessionId === 'string' &&
+    Array.isArray(v.entries) &&
+    v.entries.every(e => Array.isArray(e) && typeof e[0] === 'string' && typeof e[1] === 'number')
+  )
+}
+
+function resetCache() {
+  cacheEntries = new Map()
+  cacheColdReason = undefined
+  cacheColdTokens = undefined
+  cacheDrawn = undefined
+}
+
 // What the band last drew of the cache, so the timer redraws only when something visible changes.
-let cacheDrawn: { level: Level; minutes: number; isSvg: boolean } | undefined
+let cacheDrawn: { level: Level; minutes: number; isSvg: boolean; model: string } | undefined
 
 /**
  * Redraws the band when the cache countdown changes what it shows. A redraw flashes the whole band, so on the
  * desktop the last minute runs itself inside one drawing and only a new stage or minute redraws; the terminal
- * has no such drawing and redraws every second near the end and every 10 s before.
+ * has no such drawing and redraws every second near the end and every 10 s before. A model switch redraws at
+ * once, since the new model's cache starts cold.
  */
 async function tickCache($: EngineInterface) {
-  if (!isBand || !settings.shown.cache || cacheAt === undefined || cacheDrawn === undefined) return
+  if (!isBand || !settings.shown.cache || cacheDrawn === undefined) return
+  const model = await $.session.model()
+  if (model !== cacheDrawn.model) {
+    $.ui.invalidate('ui.render')
+
+    return
+  }
+  const at = cacheEntries.get(model)
   const now = await $.clock.now()
   // A lapsed cache has been drawn red already; it only changes with the next response.
-  if (now - (cacheAt + settings.cacheTtlMs) > 2000) return
-  const state = cacheState(cacheAt, settings.cacheTtlMs, now)
+  if (at === undefined || now - (at + cacheTtlMs) > 2000) return
+  const state = cacheState(at, cacheTtlMs, now)
   const isChanged =
     state.level !== cacheDrawn.level ||
     (cacheDrawn.isSvg
@@ -245,6 +329,7 @@ async function absorb($: EngineInterface, usage: Pick<SessionUsage, 'context' | 
   const now = await $.clock.now()
   const snapshot = toSnapshot(usage, now)
   await update($, snapshotAtom, () => snapshot)
+  await refreshCacheTtl($)
 
   const five = snapshot.windows.find(w => w.kind === 'five_hour')
   if (five) {
@@ -339,10 +424,17 @@ async function statusReport($: EngineInterface): Promise<string> {
   )
   const hidden = PARTS.filter(part => !settings.shown[part])
   lines.push(hidden.length > 0 ? `Hidden on the bar: ${hidden.join(', ')}` : 'Hidden on the bar: nothing')
+  const model = await $.session.model()
+  const cacheInfo = cacheView(model, now)
+  const ttl = cacheTtlMs === CACHE_TTL['1h'] ? '1h' : '5m'
   lines.push(
-    cacheAt === undefined
-      ? `Prompt cache: no reply yet, so no countdown (${settings.cacheTtlMs === CACHE_TTL['1h'] ? '1h' : '5m'} TTL)`
-      : `Prompt cache: ${formatClock(cacheState(cacheAt, settings.cacheTtlMs, now).remainingMs)} left of ${settings.cacheTtlMs === CACHE_TTL['1h'] ? '1h' : '5m'}, last response ${formatDuration(now - cacheAt)} ago`,
+    isCacheDisabled
+      ? 'Prompt cache: turned off (DISABLE_PROMPT_CACHING)'
+      : !cacheInfo
+        ? `Prompt cache: no reply yet, so no countdown (${ttl} lifetime from ${cacheTtlSource})`
+        : cacheEntries.has(model)
+          ? `Prompt cache: ${formatClock(cacheInfo.state.remainingMs)} left of ${ttl} (${cacheTtlSource}) on ${model}, last response ${formatDuration(now - cacheEntries.get(model)!)} ago`
+          : `Prompt cache: cold on ${model} (${cacheInfo.reason === 'compacted' ? 'the conversation was compacted' : 'each model has its own cache, and this one has not replied yet'}); ${ttl} lifetime from ${cacheTtlSource}`,
   )
   if (bandColumns !== undefined) lines.push(`Band width: ${bandColumns} columns`)
 
@@ -389,6 +481,12 @@ export const register: Register = (on, options) => {
     }
 
     await absorb($, await $.session.usage())
+    const saved = await $.store.get('cache')
+    if (cacheEntries.size === 0 && isSavedCache(saved) && saved.sessionId === sessionId) {
+      cacheEntries = new Map(saved.entries)
+      cacheColdReason = saved.coldReason
+      cacheColdTokens = saved.coldTokens
+    }
 
     if (adminKey) {
       void pollAdmin($)
@@ -417,10 +515,42 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // Each main-thread response that reached the API refreshes the cache entry.
+  // Each main-thread response that reached the API refreshes that model's cache entry.
   on('turn.complete', async ($, e, next) => {
     if (!e.agentId && e.usage) {
-      cacheAt = await $.clock.now()
+      const now = await $.clock.now()
+      cacheEntries.set(await $.session.model(), now)
+      // An entry outlives no lifetime the API offers.
+      for (const [model, at] of cacheEntries) if (now - at > HOUR) cacheEntries.delete(model)
+      cacheColdReason = undefined
+      cacheColdTokens = undefined
+      await refreshCacheTtl($)
+      await saveCache($)
+      $.ui.invalidate('ui.render')
+    }
+
+    return next(e)
+  })
+
+  // A compaction rewrites the conversation, so the old prefix no longer matches: the next turn re-reads the summary.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (!e.agentId && e.trigger !== 'precompute' && result.messages) {
+      cacheEntries = new Map()
+      cacheColdReason = 'compacted'
+      cacheColdTokens = result.tokensAfter
+      await saveCache($)
+      $.ui.invalidate('ui.render')
+    }
+
+    return result
+  })
+
+  // A /clear starts a fresh conversation under a new id, with nothing cached yet.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') {
+      resetCache()
+      await $.store.delete('cache')
       $.ui.invalidate('ui.render')
     }
 
@@ -575,20 +705,30 @@ export const register: Register = (on, options) => {
     }
     const figureLabel = (f: (typeof figures)[number]) => (isNarrow && f.isSession ? undefined : <Text dimColor>{f.label}</Text>)
     // The cache countdown: calm and dim with time left, amber near the end, red once it has lapsed.
-    const cache = settings.shown.cache && cacheAt !== undefined ? cacheState(cacheAt, settings.cacheTtlMs, now) : undefined
+    const cacheModel = settings.shown.cache ? await $.session.model() : ''
+    const cacheInfo = settings.shown.cache ? cacheView(cacheModel, now) : undefined
+    const cache = cacheInfo?.state
     const cacheTokens =
-      cache?.level === 'hot' ? ((await read($, snapshotAtom))?.contextTokens ?? (await $.session.usage()).context.tokens) : undefined
+      cache?.level !== 'hot'
+        ? undefined
+        : cacheColdReason === 'compacted' && cacheColdTokens !== undefined
+          ? cacheColdTokens
+          : ((await read($, snapshotAtom))?.contextTokens ?? (await $.session.usage()).context.tokens)
     const cacheCost =
       settings.cacheWriteUsd > 0 && cacheTokens ? `next turn ≈ ${formatUsd(cacheRewriteUsd(cacheTokens, settings.cacheWriteUsd))}` : 'next turn re-reads it all'
     const cacheMinutes = cache ? Math.ceil(cache.remainingMs / MINUTE) : 0
-    cacheDrawn = cache ? { level: cache.level, minutes: cacheMinutes, isSvg: Svg !== undefined } : undefined
+    cacheDrawn = cache ? { level: cache.level, minutes: cacheMinutes, isSvg: Svg !== undefined, model: cacheModel } : undefined
     // On the desktop a calm cache moves by the minute and a warm one runs itself inside one drawing, so the
     // band does not redraw (and flash) every second; the terminal shows the live clock.
     const cacheClock = cache ? (Svg && cache.level === 'calm' ? `${cacheMinutes}m` : formatClock(cache.remainingMs)) : ''
     const cacheTitle =
-      cache?.level === 'hot'
-        ? 'The prompt cache has lapsed; the next turn re-reads the whole context at full price'
-        : `The prompt cache lapses in ${formatClock(cache?.remainingMs ?? 0)}`
+      cache?.level !== 'hot'
+        ? `The prompt cache lapses in ${formatClock(cache?.remainingMs ?? 0)}`
+        : cacheInfo?.reason === 'compacted'
+          ? 'The conversation was compacted; the next turn re-reads the new, shorter context at full price'
+          : cacheInfo?.reason === 'switched'
+            ? 'Each model has its own prompt cache, so the next turn on this model re-reads the whole context at full price'
+            : 'The prompt cache has lapsed; the next turn re-reads the whole context at full price'
     const cacheLabel = cache && (
       <Text color={toneOf(cache.level)} dimColor={cache.level === 'calm'}>
         {cache.level === 'hot' ? '⚠ cache cold' : 'cache'}
@@ -596,7 +736,7 @@ export const register: Register = (on, options) => {
     )
     const cacheNote = cache?.level === 'warm' ? <Text color={tone('warm')}>expires soon</Text> : undefined
     // The calm bar and the ledger segment step by the minute for the same reason.
-    const cachePercent = cache ? (Svg ? ((cacheMinutes * MINUTE) / settings.cacheTtlMs) * 100 : cache.percent) : 0
+    const cachePercent = cache ? (Svg ? ((cacheMinutes * MINUTE) / cacheTtlMs) * 100 : cache.percent) : 0
     const ctxTitle = `context ${Math.round(ctx ?? 0)}% full`
     const ctxValue = (
       <Text bold color={toneOf(ctxLevel)}>
@@ -633,7 +773,7 @@ export const register: Register = (on, options) => {
     const cacheWarm = (hasBar: boolean, color = tone('warm'), hasHalo = false) =>
       cache && Svg
         ? svg(
-            cacheClockSvg({ remainingMs: cache.remainingMs, warnMs: cacheWarnMs(settings.cacheTtlMs), color, title: cacheTitle, hasBar, hasHalo }),
+            cacheClockSvg({ remainingMs: cache.remainingMs, warnMs: cacheWarnMs(cacheTtlMs), color, title: cacheTitle, hasBar, hasHalo }),
             cacheTitle,
             hasBar ? 114 : 34,
             16,
@@ -751,7 +891,7 @@ export const register: Register = (on, options) => {
           percent: e.percent,
           level: e.level,
           title: e.title,
-          clock: e.isClock && cache ? { remainingMs: cache.remainingMs, warnMs: cacheWarnMs(settings.cacheTtlMs) } : undefined,
+          clock: e.isClock && cache ? { remainingMs: cache.remainingMs, warnMs: cacheWarnMs(cacheTtlMs) } : undefined,
         })
 
         return svg(source, e.title, width, 20, false)

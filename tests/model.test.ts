@@ -18,8 +18,10 @@ import {
   levelGlyph,
   MINUTE,
   parseCacheTtl,
+  parseCacheTtlSetting,
   parseStyle,
   percentLabel,
+  resolveCacheTtl,
   periodBounds,
   smoothBar,
   sparkline,
@@ -423,5 +425,40 @@ describe('cache clock drawing', () => {
     const svg = draw(45_000, false)
     expect(svg).not.toContain('class="b"')
     expect(svg).toContain('width="34"')
+  })
+})
+
+describe('cache lifetime', () => {
+  const base = { setting: 'auto' as const, isForced5m: false, isEnabled1h: false, windows: [] }
+  const plan = [
+    { kind: 'five_hour', percentUsed: 40 },
+    { kind: 'seven_day', percentUsed: 20 },
+  ]
+
+  test('a subscription within its plan gets an hour; no windows or a gateway limit get five minutes', () => {
+    expect(resolveCacheTtl({ ...base, windows: plan })).toMatchObject({ ttl: '1h' })
+    expect(resolveCacheTtl(base)).toMatchObject({ ttl: '5m' })
+    expect(resolveCacheTtl({ ...base, windows: [{ kind: 'spend_limit', percentUsed: 10 }] })).toMatchObject({ ttl: '5m' })
+  })
+
+  test('a plan that is used up bills credits, which get five minutes', () => {
+    const spent = [{ kind: 'five_hour', percentUsed: 100 }, plan[1]!]
+    expect(resolveCacheTtl({ ...base, windows: spent })).toMatchObject({ ttl: '5m' })
+  })
+
+  test('the docs order: option, FORCE_5M, env var, promptCacheTtl, ENABLE_1H, then the plan', () => {
+    const all = { ...base, windows: plan, isForced5m: true, envTtl: '1h', settingsTtl: '1h', isEnabled1h: true }
+    expect(resolveCacheTtl({ ...all, setting: '1h' }).source).toBe('the cache_ttl option')
+    expect(resolveCacheTtl(all)).toMatchObject({ ttl: '5m', source: 'FORCE_PROMPT_CACHING_5M' })
+    expect(resolveCacheTtl({ ...all, isForced5m: false })).toMatchObject({ ttl: '1h', source: 'CLAUDE_CODE_PROMPT_CACHE_TTL' })
+    expect(resolveCacheTtl({ ...all, isForced5m: false, envTtl: undefined, settingsTtl: '5m' })).toMatchObject({ ttl: '5m' })
+    expect(resolveCacheTtl({ ...base, isEnabled1h: true })).toMatchObject({ ttl: '1h', source: 'ENABLE_PROMPT_CACHING_1H' })
+  })
+
+  test('an unknown env or setting value is ignored', () => {
+    expect(resolveCacheTtl({ ...base, windows: plan, envTtl: '30m', settingsTtl: 'forever' })).toMatchObject({ ttl: '1h' })
+    expect(parseCacheTtlSetting('auto')).toBe('auto')
+    expect(parseCacheTtlSetting('1h')).toBe('1h')
+    expect(parseCacheTtlSetting('bogus')).toBe('auto')
   })
 })

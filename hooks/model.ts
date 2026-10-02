@@ -465,6 +465,47 @@ export function parseCacheTtl(word: string): CacheTtl {
   return word === '1h' ? '1h' : '5m'
 }
 
+/** The `cache_ttl` option: a fixed lifetime, or `auto` to work it out as Claude Code does. */
+export type CacheTtlSetting = CacheTtl | 'auto'
+
+export function parseCacheTtlSetting(word: string): CacheTtlSetting {
+  return word === '5m' || word === '1h' ? word : 'auto'
+}
+
+export type CacheTtlInput = {
+  setting: CacheTtlSetting
+  /** FORCE_PROMPT_CACHING_5M is on. */
+  isForced5m: boolean
+  /** CLAUDE_CODE_PROMPT_CACHE_TTL, from the environment or the settings' env block. */
+  envTtl?: string
+  /** Claude Code's `promptCacheTtl` setting. */
+  settingsTtl?: string
+  /** ENABLE_PROMPT_CACHING_1H is on. */
+  isEnabled1h: boolean
+  /** The rate-limit windows the engine reported. */
+  windows: readonly { kind: string; percentUsed: number }[]
+}
+
+const isTtl = (word: string | undefined): word is CacheTtl => word === '5m' || word === '1h'
+
+/**
+ * Which lifetime the main conversation's cache gets, in the order Claude Code's docs give: the plugin's own
+ * option, then FORCE_PROMPT_CACHING_5M, CLAUDE_CODE_PROMPT_CACHE_TTL, `promptCacheTtl`, ENABLE_PROMPT_CACHING_1H,
+ * and last the default: one hour on a subscription within its plan usage, five minutes otherwise.
+ */
+export function resolveCacheTtl(input: CacheTtlInput): { ttl: CacheTtl; source: string } {
+  if (input.setting !== 'auto') return { ttl: input.setting, source: 'the cache_ttl option' }
+  if (input.isForced5m) return { ttl: '5m', source: 'FORCE_PROMPT_CACHING_5M' }
+  if (isTtl(input.envTtl)) return { ttl: input.envTtl, source: 'CLAUDE_CODE_PROMPT_CACHE_TTL' }
+  if (isTtl(input.settingsTtl)) return { ttl: input.settingsTtl, source: 'the promptCacheTtl setting' }
+  if (input.isEnabled1h) return { ttl: '1h', source: 'ENABLE_PROMPT_CACHING_1H' }
+  const plan = input.windows.filter(w => w.kind === 'five_hour' || w.kind === 'seven_day')
+  if (plan.length === 0) return { ttl: '5m', source: 'no subscription windows (API key or provider)' }
+  if (plan.some(w => w.percentUsed >= 100)) return { ttl: '5m', source: 'plan usage is used up, so credits bill the shorter lifetime' }
+
+  return { ttl: '1h', source: 'a subscription within its plan usage' }
+}
+
 export type CacheState = {
   /** calm while there is time, warm in the last stretch, hot once it has lapsed. */
   level: Level
