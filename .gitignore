@@ -11,3 +11,6 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/settings.local.json
+
+# Written by Claude Code when it loads the mod
+.claude-plugin/types/

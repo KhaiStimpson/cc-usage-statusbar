@@ -1,0 +1,75 @@
+{
+  "name": "usage-statusbar",
+  "displayName": "Usage Status Bar",
+  "version": "0.1.0",
+  "description": "A slim colored line above the prompt with your real usage: subscription windows, org spend limits, budgets, context and cost",
+  "author": {
+    "name": "Khai Stimpson"
+  },
+  "repository": "https://github.com/KhaiStimpson/cc-usage-statusbar",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "display": {
+      "type": "string",
+      "title": "Display",
+      "description": "band: colored line above the prompt. status: plain-text status line. both: the two together.",
+      "options": [
+        "band",
+        "status",
+        "both"
+      ],
+      "default": "band"
+    },
+    "budget_usd": {
+      "type": "number",
+      "title": "Personal budget (USD)",
+      "description": "Your own spending limit, tracked from Claude Code's cost on this machine. 0 turns it off.",
+      "default": 0,
+      "min": 0
+    },
+    "budget_period": {
+      "type": "string",
+      "title": "Budget period",
+      "description": "How often the personal budget resets.",
+      "options": [
+        "monthly",
+        "weekly",
+        "daily"
+      ],
+      "default": "monthly"
+    },
+    "org_limit_usd": {
+      "type": "number",
+      "title": "Org spend limit (USD)",
+      "description": "Dollar amount of the spend limit your gateway enforces. The gateway only reports a percentage; this turns it into dollars. 0 shows the percentage alone.",
+      "default": 0,
+      "min": 0
+    },
+    "admin_api_key": {
+      "type": "string",
+      "title": "Admin API key",
+      "description": "Optional sk-ant-admin key. Reads your org's real spend and spend limits from the Anthropic Admin API. ANTHROPIC_ADMIN_KEY in the environment works too.",
+      "sensitive": true
+    },
+    "admin_user": {
+      "type": "string",
+      "title": "Admin API user",
+      "description": "Claude Enterprise: your user ID (user_...) or email, to read your own effective spend limit. Leave empty on a Console org to read the org or workspace limit.",
+      "default": ""
+    },
+    "admin_workspace_id": {
+      "type": "string",
+      "title": "Admin API workspace",
+      "description": "Console orgs: the workspace ID (wrkspc_...) whose limit and spend to show. Empty uses the organization's limit.",
+      "default": ""
+    },
+    "admin_poll_minutes": {
+      "type": "number",
+      "title": "Admin API refresh (minutes)",
+      "description": "How often to re-read spend from the Admin API.",
+      "default": 5,
+      "min": 1,
+      "max": 60
+    }
+  }
+}
