@@ -37,14 +37,25 @@ The Admin API is read first, then the gateway, then your budget. Costs follow yo
 
 ## Install
 
-Load the folder as a plugin:
+This repository is its own plugin marketplace. In Claude Code:
 
-```sh
-git clone https://github.com/KhaiStimpson/cc-usage-statusbar
-claude --plugin-dir ./cc-usage-statusbar
+```
+/plugin marketplace add KhaiStimpson/cc-usage-statusbar
+/plugin install usage-statusbar@cc-usage-statusbar
 ```
 
-To load it in every session, add the folder to `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`.
+Or from your shell:
+
+```sh
+claude plugin marketplace add KhaiStimpson/cc-usage-statusbar
+claude plugin install usage-statusbar@cc-usage-statusbar
+```
+
+Run `/plugin configure usage-statusbar@cc-usage-statusbar` to set a budget, your gateway's limit or an Admin API key. Everything is optional.
+
+To get updates, run `/plugin marketplace update cc-usage-statusbar`. The plugin's `version` in `.claude-plugin/plugin.json` decides when an update reaches users, so bump it with every release.
+
+To try a local checkout without installing it, run `claude --plugin-dir ./cc-usage-statusbar`.
 
 ## Settings
 
@@ -72,7 +83,7 @@ Change these in `/config` (the Admin API key is entered when the plugin is enabl
 
 The mod has three files the engine loads:
 
-- `.claude-plugin/plugin.json`
+- `.claude-plugin/plugin.json`, beside `.claude-plugin/marketplace.json`, which lists this repository as the marketplace's one plugin
 - `hooks/hooks.json`
 - `hooks/register.tsx`, which pulls in `hooks/model.ts`, `hooks/ledger.ts` and `hooks/admin.ts`
 

@@ -1,0 +1,17 @@
+{
+  "name": "cc-usage-statusbar",
+  "description": "A live usage status bar for Claude Code: subscription windows, org spend limits, budgets, context and cost",
+  "owner": {
+    "name": "Khai Stimpson",
+    "url": "https://github.com/KhaiStimpson"
+  },
+  "plugins": [
+    {
+      "name": "usage-statusbar",
+      "source": ".",
+      "description": "A slim colored line above the prompt with your real usage, a /usagebar details pane, and alerts at 80/95/100%",
+      "category": "productivity",
+      "tags": ["usage", "status line", "rate limits", "spend limits", "cost"]
+    }
+  ]
+}
