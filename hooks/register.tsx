@@ -567,6 +567,9 @@ export const register: Register = (on, options) => {
       cache?.level === 'hot' ? ((await read($, snapshotAtom))?.contextTokens ?? (await $.session.usage()).context.tokens) : undefined
     const cacheCost =
       settings.cacheWriteUsd > 0 && cacheTokens ? `next turn ≈ ${formatUsd(cacheRewriteUsd(cacheTokens, settings.cacheWriteUsd))}` : 'next turn re-reads it all'
+    // The bar moves in whole pixels, so the drawing only changes when it visibly does.
+    const cacheWidth = cache && isLoud(cache.level) ? (isNarrow ? 52 : 72) : 28
+    const snap = (percent: number, width: number) => Math.round((percent / 100) * width) * (100 / width)
     const cacheClock = cache ? formatClock(cache.remainingMs) : ''
     const cacheTitle =
       cache?.level === 'hot'
@@ -655,7 +658,7 @@ export const register: Register = (on, options) => {
           ) : cache.level === 'hot' ? (
             chip('hot', [cacheLabel, cacheValue])
           ) : (
-            chip('warm', [cacheLabel, meter(cache.percent, undefined, cacheTitle, tone('warm')), cacheValue, cacheNote])
+            chip('warm', [cacheLabel, meter(snap(cache.percent, 72), undefined, cacheTitle, tone('warm')), cacheValue, cacheNote])
           ),
         )
       }
@@ -732,7 +735,7 @@ export const register: Register = (on, options) => {
         ...(cache
           ? [
               {
-                percent: cache.level === 'hot' ? 100 : cache.percent,
+                percent: cache.level === 'hot' ? 100 : snap(cache.percent, 120),
                 pace: undefined,
                 color: isLoud(cache.level) ? tone(cache.level) : quiet,
                 title: cacheTitle,
@@ -771,7 +774,18 @@ export const register: Register = (on, options) => {
       return { from, isHot }
     }
     // A calm meter is a thin 28 px bar, or one level glyph in the terminal.
-    const meter = (id: string, percent: number, pace: number | undefined, level: Level, title: string, color: string, width: number) => {
+    // A static bar skips the grow-in, sheen and pace motion: the cache countdown redraws every second,
+    // and each redraw would restart them.
+    const meter = (
+      id: string,
+      percent: number,
+      pace: number | undefined,
+      level: Level,
+      title: string,
+      color: string,
+      width: number,
+      isStatic = false,
+    ) => {
       const isThin = !isLoud(level)
       if (Svg) {
         const source = barSvg({
@@ -780,8 +794,8 @@ export const register: Register = (on, options) => {
           width,
           color,
           title,
-          height: isThin ? 4 : undefined,
-          motion: motion(id, percent, level === 'hot'),
+          height: isThin ? 4 : isStatic ? 8 : undefined,
+          motion: isStatic ? undefined : motion(id, percent, level === 'hot'),
         })
 
         return svg(source, title, width, 14)
@@ -824,7 +838,16 @@ export const register: Register = (on, options) => {
           ) : (
             <Box gap={1} alignItems="center">
               {cacheLabel}
-              {meter('cache', cache.percent, undefined, cache.level, cacheTitle, tone(cache.level), isLoud(cache.level) ? (isNarrow ? 52 : 72) : 28)}
+              {meter(
+                'cache',
+                snap(cache.percent, cacheWidth),
+                undefined,
+                cache.level,
+                cacheTitle,
+                tone(cache.level),
+                cacheWidth,
+                true,
+              )}
               {cacheValue}
               {cacheNote}
             </Box>
