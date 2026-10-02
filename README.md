@@ -21,10 +21,11 @@ org ██████▎░░░ $312 / $500 ahead of pace resets Nov 1   toda
 - **Bars** are green, amber from 70% (80% for spend) or when you're ahead of pace, and red from 90% (95% for spend).
 - **Calm gauges stay small**: a label, a number and a tiny level mark. Once a gauge turns amber or red it gets a full bar, a note such as `ahead of pace` or `limit in ~40m`, and its reset time.
 - **The ┃ marker** on a full bar is where you'd be if you spent evenly through the window, so you can tell at a glance whether 81% is fine.
-- **`/usagebar`** opens a side pane with:
-  - a chart of the current 5-hour window, your burn rate, and when you'd hit 100%
-  - spend per day, a forecast for the end of the period, when you'd hit the limit, and money left per day
-  - cost per turn
+- **`/usagebar`** opens a side pane, a quiet list divided by hairlines (plain text in the terminal), with:
+  - the 5-hour window as a big figure, a bar with its pace tick, burn rate, when you'd hit 100% and a stepped chart of the window with a dashed projection; the 7-day window beneath it
+  - session cost, context, and the prompt cache (minutes left, a draining countdown when it is about to lapse, and what a cold cache will cost to re-read)
+  - cost per turn, with a bar under each turn
+  - with a budget or spend cap: spent against the limit, spend per day, a forecast for the end of the period, when you'd hit the limit, and money left per day
 - **Cache countdown**: a `cache` part counts down to when the prompt cache lapses, and follows what the [prompt caching docs](https://code.claude.com/docs/en/prompt-caching) say resets it.
   - **Lifetime:** with `cache_ttl` on `auto` (the default) it is 1 hour on a subscription within its plan usage, and 5 minutes on an API key, a cloud provider, or once usage credits are billing. `CLAUDE_CODE_PROMPT_CACHE_TTL`, `FORCE_PROMPT_CACHING_5M`, `ENABLE_PROMPT_CACHING_1H` (in the environment or the settings' `env` block) and the `promptCacheTtl` setting are honoured in the docs' order, and `DISABLE_PROMPT_CACHING` hides the part. Set `cache_ttl` to `5m` or `1h` to force it.
   - **Per model:** each model has its own cache, so the countdown follows the model you are on. After `/model` the new model reads cold at once, and switching back to a model within its lifetime reads warm again.

@@ -39,7 +39,21 @@ import {
 } from './model'
 import type { CacheState, CacheTtlSetting, Gauge, Options, Part, Shown, Style, View } from './model'
 import type { PillPart } from './svg'
-import { barSvg, cacheClockSvg, liveDotSvg, pillSvg, ruleSvg, sparkSvg, SVG_COLOR, SVG_QUIET } from './svg'
+import {
+  barSvg,
+  cacheClockSvg,
+  dailySvg,
+  figureSvg,
+  hairlineSvg,
+  historySvg,
+  liveDotSvg,
+  pillSvg,
+  ruleSvg,
+  sparkSvg,
+  SVG_COLOR,
+  SVG_QUIET,
+  thinBarSvg,
+} from './svg'
 
 const PANE = 'usage-statusbar'
 const COMMAND = 'usagebar'
@@ -166,8 +180,8 @@ let cacheTimer: Timer | undefined
 const COLD: CacheState = { level: 'hot', remainingMs: 0, percent: 0 }
 
 /** The cache as the band shows it for `model`, or nothing when no reply has told us anything yet. */
-function cacheView(model: string, now: number): { state: CacheState; reason?: string } | undefined {
-  if (!settings.shown.cache || isCacheDisabled) return undefined
+function cacheView(model: string, now: number, isForced = false): { state: CacheState; reason?: string } | undefined {
+  if ((!settings.shown.cache && !isForced) || isCacheDisabled) return undefined
   const at = cacheEntries.get(model)
   if (at !== undefined) return { state: cacheState(at, cacheTtlMs, now) }
   if (cacheColdReason === 'compacted') return { state: COLD, reason: 'compacted' }
@@ -1049,8 +1063,311 @@ export const register: Register = (on, options) => {
     const history = await read($, historyAtom)
     const turns = await read($, turnsAtom)
     const rate = burnRate(history, now)
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const table = $.ui.resolve(e)
+    const { Box, Text, Button } = table
+    // The terminal's table names Svg too, drawing nothing; only the other surfaces paint it.
+    const Svg = e.surface !== 'terminal' && 'Svg' in table ? table.Svg : undefined
     const width = Math.max(20, e.props.bodyColumns - 2)
+
+    if (Svg) {
+      // A quiet list: sections divided by hairlines, one big figure each, thin bars, the 5-hour history as a chart.
+      const pw = Math.max(240, Math.min(440, Math.round(width * 7.5)))
+      const tone = (level: Level) => SVG_COLOR[level]
+      const svg = (source: string, alt: string, wide: number, tall: number) => (
+        <Svg source={source} alt={alt} width={wide} height={tall} isInteractive={false} />
+      )
+      const bar = (id: string, percent: number, pace: number | undefined, level: Level, title: string) => {
+        const key = `${e.surface}:pane:${id}`
+        const from = drawnPercent.get(key) ?? 0
+        drawnPercent.set(key, percent)
+
+        return svg(
+          barSvg({ percent, pace, width: pw, color: tone(level), title, height: 6, motion: { from, isHot: level === 'hot' } }),
+          title,
+          pw,
+          14,
+        )
+      }
+      const figure = (value: string, unit?: string, color?: string) => {
+        const f = figureSvg({ value, unit, color })
+
+        return svg(f.source, `${value}${unit ?? ''}`, f.width, f.height)
+      }
+      const percentFigure = (percent: number, color?: string) => figure(percentLabel(percent).replace('%', ''), '%', color)
+      const fact = (name: string, value: string, color?: string) => (
+        <Box flexDirection="column" flexGrow={1}>
+          <Text dimColor>{name}</Text>
+          <Text bold color={color}>
+            {value}
+          </Text>
+        </Box>
+      )
+      const items: unknown[] = []
+      const section = (node: unknown) => {
+        if (items.length > 0) items.push(svg(hairlineSvg(pw), '', pw, 1))
+        items.push(node)
+      }
+
+      for (const g of view.windows) {
+        const isFive = g.id === 'five_hour'
+        const name = isFive ? '5-hour window' : g.id === 'seven_day' ? '7-day window' : g.label
+        const pace = g.pace !== undefined ? (g.isAhead ? 'Ahead of pace' : 'Under pace') : undefined
+        const reset =
+          g.resetsAt !== undefined
+            ? `resets ${g.resetsAt - now < 86_400_000 ? `in ${formatReset(g.resetsAt, now)}` : formatReset(g.resetsAt, now)}`
+            : ''
+        const color = g.level === 'calm' ? undefined : tone(g.level)
+        const full = isFive ? hitsFullIn(g, rate, now) : undefined
+        const windowStart = g.resetsAt !== undefined ? g.resetsAt - 5 * HOUR : undefined
+        const points =
+          isFive && windowStart !== undefined
+            ? history
+                .filter(s => s.resetsAt === g.resetsAt)
+                .map(s => ({ at: (s.at - windowStart) / (5 * HOUR), percent: s.percent }))
+                .filter(p => p.at >= 0 && p.at <= 1)
+            : []
+        if (points.length > 0 && g.pace !== undefined) points.push({ at: g.pace / 100, percent: g.percent })
+        section(
+          <Box flexDirection="column" gap={1}>
+            <Box justifyContent="space-between">
+              <Text dimColor>{name}</Text>
+              {pace && (
+                <Text color={color} dimColor={g.level === 'calm'}>
+                  {pace}
+                </Text>
+              )}
+            </Box>
+            <Box justifyContent="space-between" alignItems="flex-end">
+              {percentFigure(g.percent, color)}
+              <Text dimColor>{reset}</Text>
+            </Box>
+            {bar(
+              g.id,
+              g.percent,
+              g.pace,
+              g.level,
+              `${g.label}: ${percentLabel(g.percent)} used${g.pace !== undefined ? `, ${percentLabel(g.pace)} of the window gone` : ''}`,
+            )}
+            {isFive ? (
+              <Box>
+                {fact('Burn rate', rate !== undefined ? `${Math.round(rate)}%/hr` : '–')}
+                {fact(
+                  'Full in',
+                  full !== undefined ? `~${formatDuration(full)}` : rate !== undefined ? 'after reset' : '–',
+                  full !== undefined ? tone(g.level) : undefined,
+                )}
+                {fact('Window elapsed', g.pace !== undefined ? percentLabel(g.pace) : '–')}
+              </Box>
+            ) : (
+              g.pace !== undefined && <Text dimColor>{percentLabel(g.pace)} of the window elapsed</Text>
+            )}
+            {points.length > 1 &&
+              svg(
+                historySvg({ points, rate, windowHours: 5, color: tone(g.level), width: pw, height: 118, title: `${g.label} over the window` }),
+                `${g.label} history`,
+                pw,
+                118,
+              )}
+          </Box>,
+        )
+      }
+
+      const half = Math.floor((pw - 24) / 2)
+      const ctxPercent = snapshot?.contextPercent
+      const ctxLevel: Level = ctxPercent === undefined ? 'calm' : ctxPercent >= 90 ? 'hot' : ctxPercent >= 75 ? 'warm' : 'calm'
+      if (view.sessionUsd !== undefined || ctxPercent !== undefined) {
+        section(
+          <Box gap={3}>
+            {view.sessionUsd !== undefined && (
+              <Box flexDirection="column" gap={1} flexGrow={1}>
+                <Text dimColor>Session cost</Text>
+                {figure(formatUsd(view.sessionUsd))}
+              </Box>
+            )}
+            {ctxPercent !== undefined && (
+              <Box flexDirection="column" gap={1} flexGrow={1}>
+                <Text dimColor>Context</Text>
+                {figure(String(Math.round(ctxPercent)), '%', ctxLevel === 'calm' ? undefined : tone(ctxLevel))}
+                {svg(
+                  thinBarSvg(ctxPercent, half, ctxLevel === 'calm' ? SVG_COLOR.ctx : tone(ctxLevel), `context ${Math.round(ctxPercent)}% full`, 4),
+                  'context',
+                  half,
+                  4,
+                )}
+                {snapshot?.contextTokens !== undefined && (
+                  <Text dimColor>
+                    {Math.round(snapshot.contextTokens / 1000)}k of {Math.round(snapshot.contextWindow / 1000)}k tokens
+                  </Text>
+                )}
+              </Box>
+            )}
+          </Box>,
+        )
+      }
+
+      const cacheModel = await $.session.model()
+      const cacheInfo = cacheView(cacheModel, now, true)
+      if (cacheInfo) {
+        const c = cacheInfo.state
+        const at = cacheEntries.get(cacheModel)
+        const minutes = Math.ceil(c.remainingMs / MINUTE)
+        const tokens =
+          c.level !== 'hot'
+            ? undefined
+            : cacheColdReason === 'compacted' && cacheColdTokens !== undefined
+              ? cacheColdTokens
+              : (snapshot?.contextTokens ?? (await $.session.usage()).context.tokens)
+        const cost = settings.cacheWriteUsd > 0 && tokens ? `, about ${formatUsd(cacheRewriteUsd(tokens, settings.cacheWriteUsd))}` : ''
+        const ttlLabel = cacheTtlMs >= HOUR ? `${Math.round(cacheTtlMs / HOUR)}h` : `${Math.round(cacheTtlMs / MINUTE)}m`
+        const why =
+          cacheInfo.reason === 'compacted'
+            ? 'The conversation was compacted, so the next turn re-reads the shorter context'
+            : cacheInfo.reason === 'switched'
+              ? 'Each model has its own cache, so the next turn on this model re-reads the whole context'
+              : 'The cache lapsed, so the next turn re-reads the whole context'
+        const title = c.level === 'hot' ? why : `The prompt cache lapses in ${formatClock(c.remainingMs)}`
+        section(
+          <Box flexDirection="column" gap={1}>
+            <Box justifyContent="space-between">
+              <Text dimColor>Prompt cache</Text>
+              <Text color={c.level === 'calm' ? undefined : tone(c.level)} dimColor={c.level === 'calm'}>
+                {c.level === 'hot' ? 'Cold' : c.level === 'warm' ? 'Expiring' : 'Warm'}
+              </Text>
+            </Box>
+            {c.level === 'hot' ? (
+              <Text bold color={tone('hot')}>
+                Cold
+              </Text>
+            ) : c.level === 'warm' ? (
+              <Box gap={1} alignItems="center">
+                {svg(
+                  cacheClockSvg({ remainingMs: c.remainingMs, warnMs: cacheWarnMs(cacheTtlMs), color: tone('warm'), title, hasBar: true }),
+                  title,
+                  114,
+                  16,
+                )}
+                <Text dimColor>left of {ttlLabel}</Text>
+              </Box>
+            ) : (
+              <Box gap={1} alignItems="flex-end">
+                <Text bold>{minutes}m</Text>
+                <Text dimColor>left of {ttlLabel}</Text>
+              </Box>
+            )}
+            {c.level === 'calm' && svg(thinBarSvg(((minutes * MINUTE) / cacheTtlMs) * 100, pw, tone('calm'), title, 4), title, pw, 4)}
+            <Text dimColor>
+              {cacheModel}
+              {at !== undefined ? ` · last response ${now - at < MINUTE ? 'just now' : `${formatDuration(now - at)} ago`}` : ''}
+            </Text>
+            {c.level === 'hot' && (
+              <Text color={tone('hot')}>
+                {why}
+                {cost}.
+              </Text>
+            )}
+          </Box>,
+        )
+      }
+
+      const recent = turns.filter(t => t.usd > 0).slice(-5).reverse()
+      if (recent.length > 0) {
+        const top = Math.max(...recent.map(t => t.usd))
+        const total = recent.reduce((sum, t) => sum + t.usd, 0)
+        section(
+          <Box flexDirection="column" gap={1}>
+            <Box justifyContent="space-between">
+              <Text dimColor>Cost by turn</Text>
+              <Text dimColor>newest first</Text>
+            </Box>
+            {recent.map(t => (
+              <Box flexDirection="column">
+                <Box justifyContent="space-between" gap={2}>
+                  <Text wrap="truncate-end">{t.text}</Text>
+                  <Text bold>{formatUsd(t.usd)}</Text>
+                </Box>
+                {svg(thinBarSvg((t.usd / top) * 100, pw, t.usd === top && t.usd >= 1 ? tone('warm') : SVG_QUIET, formatUsd(t.usd)), formatUsd(t.usd), pw, 3)}
+              </Box>
+            ))}
+            <Box justifyContent="space-between">
+              <Text dimColor>Last {recent.length === 1 ? 'turn' : `${recent.length} turns`}</Text>
+              <Text bold>{formatUsd(total)}</Text>
+            </Box>
+          </Box>,
+        )
+      }
+
+      const gauge = view.spend
+      if (gauge) {
+        const source =
+          gauge.label === 'budget'
+            ? `API budget · ${settings.budgetPeriod}, this machine`
+            : admin && !admin.error && admin.limitUsd
+              ? `API budget · org limit, ${admin.scope}`
+              : 'API budget · org limit, gateway'
+        const isMoney = gauge.spentUsd !== undefined && gauge.limitUsd !== undefined
+        const color = gauge.level === 'calm' ? undefined : tone(gauge.level)
+        const daily = (gauge.label === 'org' && admin && admin.days.length > 0 ? admin.days : (spend?.days ?? [])).slice(-14).map(d => d.usd)
+        const facts: [string, string][] = []
+        if (gauge.forecastUsd !== undefined) facts.push(['Forecast', `~${formatUsd(gauge.forecastUsd)}`])
+        if (gauge.hitsLimitAt !== undefined) facts.push(['Hits limit', `~${formatDate(gauge.hitsLimitAt)}`])
+        if (isMoney && gauge.resetsAt !== undefined && gauge.spentUsd! < gauge.limitUsd!) {
+          const daysLeft = Math.max(1, Math.ceil((gauge.resetsAt - now) / 86_400_000))
+          facts.push(['Left to spend', `${formatUsd((gauge.limitUsd! - gauge.spentUsd!) / daysLeft)}/day`])
+        }
+        if (view.monthUsd !== undefined) facts.push(['Month', `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`])
+        if (spend && view.isApiMode) facts.push(['Today', formatUsd(spend.todayUsd)])
+        section(
+          <Box flexDirection="column" gap={1}>
+            <Box justifyContent="space-between">
+              <Text dimColor>{source}</Text>
+              {gauge.resetsAt !== undefined && <Text dimColor>resets {formatDate(gauge.resetsAt)}</Text>}
+            </Box>
+            <Box justifyContent="space-between" alignItems="flex-end">
+              {isMoney
+                ? figure(`${gauge.isEstimate ? '≈' : ''}${formatUsd(gauge.spentUsd!)}`, ` of ${formatUsd(gauge.limitUsd!)}`, color)
+                : percentFigure(gauge.percent, color)}
+              {isMoney && (
+                <Text bold color={color}>
+                  {percentLabel(gauge.percent)}
+                </Text>
+              )}
+            </Box>
+            {bar('spend', gauge.percent, gauge.pace, gauge.level, `${gauge.label}: ${percentLabel(gauge.percent)} used`)}
+            {daily.length > 1 && svg(dailySvg(daily, SVG_COLOR.ctx, pw, 40, 'Spend by day, latest in colour'), 'Spend by day', pw, 40)}
+            {facts.length > 0 && (
+              <Box flexWrap="wrap" columnGap={4}>
+                {facts.map(([name, value]) => (
+                  <Box flexDirection="column">
+                    <Text dimColor>{name}</Text>
+                    <Text bold>{value}</Text>
+                  </Box>
+                ))}
+              </Box>
+            )}
+          </Box>,
+        )
+      } else if (view.monthUsd !== undefined || (spend && view.isApiMode)) {
+        section(
+          <Box gap={4}>
+            {view.monthUsd !== undefined && fact('Month', `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`)}
+            {spend && view.isApiMode && fact('Today', formatUsd(spend.todayUsd))}
+          </Box>,
+        )
+      }
+
+      if (admin?.error) section(<Text color={COLOR.warm}>Admin API: {admin.error}</Text>)
+      if (items.length === 0) section(<Text dimColor>No usage reported yet. It appears after the first reply.</Text>)
+
+      return (
+        <Box flexDirection="column" gap={1} paddingX={1}>
+          {items}
+          <Box gap={1}>
+            {adminKey && <Button key="refresh" label="Refresh" hotkey="r" onPress={() => void pollAdmin($)} />}
+            <Button key="close" label="Close" role="dismiss" onPress={() => void $.ui.close({ id: PANE })} />
+          </Box>
+        </Box>
+      )
+    }
 
     const row = (label: string, value: string, color?: string) => (
       <Box justifyContent="space-between">

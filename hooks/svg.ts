@@ -287,3 +287,144 @@ export function pillSvg({ parts, percent, level, title, clock }: PillSvg): { sou
 
   return { source, width }
 }
+
+/** A 1 px rule across `width` px, the pane's divider between sections. */
+export function hairlineSvg(width: number): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="1" viewBox="0 0 ${width} 1"><rect width="${width}" height="1" ${TRACK}/></svg>`
+}
+
+/** A 3 px bar with no motion, for the rows under a list. */
+export function thinBarSvg(percent: number, width: number, color: string, title: string, height = 3): string {
+  const fw = fillWidth(percent, width)
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<title>${esc(title)}</title>` +
+    `<rect width="${width}" height="${height}" rx="${height / 2}" ${TRACK}/>` +
+    (fw > 0 ? `<rect width="${fw}" height="${height}" rx="${height / 2}" fill="${color}"/>` : '') +
+    '</svg>'
+  )
+}
+
+export type FigureSvg = {
+  value: string
+  /** Smaller, dim text after the value: `%`, or ` of $500`. */
+  unit?: string
+  /** The value's colour; the viewer's text colour when absent. */
+  color?: string
+  size?: number
+}
+
+/** A large figure drawn as text, since the pane's own Text has one size. */
+export function figureSvg({ value, unit = '', color, size = 34 }: FigureSvg): { source: string; width: number; height: number } {
+  const height = Math.round(size * 1.2)
+  const unitSize = Math.round(size * 0.46)
+  const valueWidth = Math.ceil((textWidth(value, true) * size) / 13) - 2
+  const unitWidth = unit ? Math.ceil((textWidth(unit, false) * unitSize) / 13) + 3 : 0
+  const width = valueWidth + unitWidth
+  const y = Math.round(size * 0.92)
+  const source =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    '<style>' +
+    "text{font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-variant-numeric:tabular-nums}" +
+    '.v{fill:#1d1d1b}.d{fill:#6b6a65}' +
+    '@media (prefers-color-scheme:dark){.v{fill:#ecebe6}.d{fill:#9a988f}}' +
+    '</style>' +
+    `<text class="v" x="0" y="${y}" font-size="${size}" font-weight="600" letter-spacing="-0.03em"${color ? ` fill="${color}"` : ''}>${esc(value)}</text>` +
+    (unit ? `<text class="d" x="${valueWidth + 3}" y="${y}" font-size="${unitSize}">${esc(unit)}</text>` : '') +
+    '</svg>'
+
+  return { source, width, height }
+}
+
+export type HistorySvg = {
+  /** Samples of the window, `at` as 0 to 1 of the window's length. */
+  points: readonly { at: number; percent: number }[]
+  /** Percent per hour, for the dashed projection. */
+  rate?: number
+  windowHours: number
+  color: string
+  width: number
+  height: number
+  title: string
+}
+
+/**
+ * The 5-hour window as a stepped area chart: usage so far, the even-pace diagonal, and a dashed projection at
+ * the current burn rate that stops where it hits 100% or the reset.
+ */
+export function historySvg({ points, rate, windowHours, color, width, height, title }: HistorySvg): string {
+  const left = 30
+  const top = 6
+  const bottom = 14
+  const pw = width - left - 4
+  const ph = height - top - bottom
+  const X = (t: number) => r1(left + clamp(t, 0, 1) * pw)
+  const Y = (v: number) => r1(top + ph - (clamp(v) / 100) * ph)
+  const base = top + ph
+  const pts = points.length > 0 ? points : [{ at: 0, percent: 0 }]
+  const first = pts[0]!
+  const last = pts[pts.length - 1]!
+  let line = `M${X(first.at)} ${Y(first.percent)}`
+  for (const p of pts.slice(1)) line += `H${X(p.at)}V${Y(p.percent)}`
+  const area = `${line}L${X(last.at)} ${base}L${X(first.at)} ${base}Z`
+
+  let projection = ''
+  if (rate !== undefined && rate > 0 && last.at < 1) {
+    const hoursLeft = (1 - last.at) * windowHours
+    const reaches = last.percent + rate * hoursLeft
+    const endAt = reaches > 100 ? last.at + (100 - last.percent) / rate / windowHours : 1
+    projection = `<path d="M${X(last.at)} ${Y(last.percent)}L${X(endAt)} ${Y(Math.min(100, reaches))}" fill="none" stroke="${color}" stroke-width="1.5" stroke-dasharray="3 4" stroke-opacity="0.8"/>`
+  }
+  const grid = [0, 50, 100]
+    .map(
+      v =>
+        `<rect x="${left}" y="${Y(v)}" width="${pw}" height="1" ${TRACK}/>` +
+        `<text class="a" x="${left - 6}" y="${Y(v) + 3}" text-anchor="end">${v}%</text>`,
+    )
+    .join('')
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<title>${esc(title)}</title>` +
+    '<style>' +
+    "text{font:10px system-ui,-apple-system,'Segoe UI',sans-serif}.a{fill:#6b6a65}" +
+    '@media (prefers-color-scheme:dark){.a{fill:#9a988f}}' +
+    '.l{stroke-dasharray:1;animation:d 1.5s cubic-bezier(.3,.7,.2,1) both}@keyframes d{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}' +
+    '.r{transform-box:fill-box;transform-origin:center;animation:p 2.4s ease-out infinite}' +
+    '@keyframes p{0%{transform:scale(1);opacity:.6}100%{transform:scale(3);opacity:0}}' +
+    `${REDUCED}</style>` +
+    `<defs><linearGradient id="a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${color}" stop-opacity="0.3"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>` +
+    grid +
+    `<rect x="${left}" y="${Y(90)}" width="${pw}" height="1" fill="#d9563f" fill-opacity="0.45"/>` +
+    `<path d="M${left} ${base}L${left + pw} ${top}" stroke="#808080" stroke-opacity="0.5" stroke-dasharray="2 5" fill="none"/>` +
+    `<path d="${area}" fill="url(#a)"/>` +
+    `<path class="l" pathLength="1" d="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` +
+    projection +
+    `<circle class="r" cx="${X(last.at)}" cy="${Y(last.percent)}" r="3.5" fill="${color}"/><circle cx="${X(last.at)}" cy="${Y(last.percent)}" r="3.5" fill="${color}"/>` +
+    `<text class="a" x="${left}" y="${height - 1}">start</text><text class="a" x="${left + pw}" y="${height - 1}" text-anchor="end">resets</text>` +
+    '</svg>'
+  )
+}
+
+/** Recent daily spend as columns that grow in, the latest day in colour. */
+export function dailySvg(values: readonly number[], color: string, width: number, height: number, title: string): string {
+  const n = Math.max(1, values.length)
+  const gap = 3
+  const bw = r1((width - gap * (n - 1)) / n)
+  const top = Math.max(0, ...values)
+  const bars = values
+    .map((v, i) => {
+      const h = r1(Math.max(2, top > 0 ? (v / top) * (height - 2) : 2))
+
+      return `<rect class="c" x="${r1(i * (bw + gap))}" y="${r1(height - h)}" width="${bw}" height="${h}" rx="2" fill="${i === values.length - 1 ? color : '#808080'}" fill-opacity="${i === values.length - 1 ? 1 : 0.35}" style="animation-delay:${i * 30}ms"/>`
+    })
+    .join('')
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+    `<title>${esc(title)}</title>` +
+    '<style>.c{transform-box:fill-box;transform-origin:bottom;animation:g .8s cubic-bezier(.2,.8,.2,1) both}@keyframes g{from{transform:scaleY(0)}to{transform:scaleY(1)}}' +
+    `${REDUCED}</style>${bars}</svg>`
+  )
+}

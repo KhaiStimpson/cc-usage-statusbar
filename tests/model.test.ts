@@ -28,7 +28,7 @@ import {
   statusText,
   windowGauge,
 } from '../hooks/model'
-import { barSvg, cacheClockSvg, liveDotSvg, ruleSvg } from '../hooks/svg'
+import { barSvg, cacheClockSvg, dailySvg, figureSvg, hairlineSvg, historySvg, liveDotSvg, ruleSvg, thinBarSvg } from '../hooks/svg'
 import type { Snapshot } from '../types'
 
 const NOW = new Date(2026, 9, 14, 15, 0, 0).getTime() // Wed Oct 14, 3pm local
@@ -359,6 +359,48 @@ describe('styles', () => {
     )
     expect(svg.match(/<g>/g)).toHaveLength(2)
     expect(svg).toContain('<rect x="208" y="4" width="200" height="3"')
+  })
+})
+
+describe('pane drawings', () => {
+  test('the history chart steps through the samples and projects to 100% when the burn would fill it', () => {
+    const svg = historySvg({
+      points: [
+        { at: 0.1, percent: 10 },
+        { at: 0.5, percent: 50 },
+        { at: 0.76, percent: 83 },
+      ],
+      rate: 27,
+      windowHours: 5,
+      color: '#d4923a',
+      width: 440,
+      height: 118,
+      title: 't',
+    })
+    expect(svg).toContain('H')
+    expect(svg).toContain('stroke-dasharray="3 4"')
+    expect(svg).toContain('prefers-reduced-motion')
+    expect(svg.match(/<path class="l"/g)).toHaveLength(1)
+  })
+
+  test('without a burn rate the chart has no projection', () => {
+    const svg = historySvg({ points: [{ at: 0.2, percent: 5 }], windowHours: 5, color: '#4f9e6a', width: 300, height: 100, title: 't' })
+    expect(svg).not.toContain('stroke-dasharray="3 4"')
+  })
+
+  test('daily columns colour only the latest day', () => {
+    const svg = dailySvg([1, 2, 4], '#6f8fbf', 90, 40, 't')
+    expect(svg.match(/<rect class="c"/g)).toHaveLength(3)
+    expect(svg.match(/fill="#6f8fbf"/g)).toHaveLength(1)
+  })
+
+  test('figures, hairlines and thin bars draw at the size asked', () => {
+    const figure = figureSvg({ value: '44', unit: '%', size: 34 })
+    expect(figure.height).toBe(41)
+    expect(figure.source).toContain('>44</text>')
+    expect(hairlineSvg(300)).toContain('width="300" height="1"')
+    expect(thinBarSvg(50, 200, '#4f9e6a', 't', 4)).toContain('width="100" height="4"')
+    expect(thinBarSvg(0, 200, '#4f9e6a', 't')).not.toContain('fill="#4f9e6a"')
   })
 })
 

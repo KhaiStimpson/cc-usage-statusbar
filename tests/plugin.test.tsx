@@ -443,6 +443,60 @@ describe('cache countdown', () => {
     await warm.unmount()
   })
 
+  const pane = (surface: 'terminal' | 'desktop', bodyColumns: number) => ({
+    surface,
+    plugin: PLUGIN,
+    component: 'Pane' as const,
+    requestId: 'usage-statusbar',
+    props: {
+      title: 'Usage',
+      isFocused: false,
+      bodyColumns,
+      placement: 'dock' as const,
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  })
+
+  test('the desktop pane is a quiet list with figures, bars and the cache', async ($, on) => {
+    world(on, BUSY)
+    engine(on)
+    await reply($, BUSY)
+
+    const ui = await $.ui.mount(pane('desktop', 60))
+    expect(await ui.find({ type: 'Text', text: '5-hour window' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Ahead of pace' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Burn rate' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '7-day window' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Session cost' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Context' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Prompt cache' })).toBeDefined()
+    expect(await ui.find({ type: 'Svg', source: />83</ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', key: 'close' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the desktop pane says why a lapsed cache is cold and what the next turn costs', async ($, on) => {
+    const { clock } = world(on, SUBSCRIPTION)
+    engine(on)
+    await $.turn.complete(TURN)
+    await clock.advance(MINUTES(6))
+
+    const ui = await $.ui.mount(pane('desktop', 60))
+    expect(await ui.find({ type: 'Text', text: /The cache lapsed.*about \$0\.36/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('the terminal pane stays plain text', async ($, on) => {
+    world(on, BUSY)
+    engine(on)
+
+    const ui = await $.ui.mount(pane('terminal', 48))
+    expect(await ui.find({ type: 'Text', text: '5-hour window' })).toBeDefined()
+    expect(await ui.find({ type: 'Svg' })).toBeUndefined()
+    await ui.unmount()
+  })
+
   /** A reply on the session's model, after the plan's windows have been reported. */
   const reply = async ($: Parameters<Parameters<typeof test>[2]>[0], usage: SessionUsage) => {
     await $.session.measure({ ...usage, changed: ['rateLimits'] })
