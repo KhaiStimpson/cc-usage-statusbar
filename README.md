@@ -25,6 +25,7 @@ org ██████▎░░░ $312 / $500 ahead of pace resets Nov 1   toda
   - a chart of the current 5-hour window, your burn rate, and when you'd hit 100%
   - spend per day, a forecast for the end of the period, when you'd hit the limit, and money left per day
   - cost per turn
+- **Cache countdown**: a `cache` part counts down to when the prompt cache lapses (5 minutes after the last reply, or 1 hour with `cache_ttl`). It stays a dim `cache 3:42` while there is time, goes amber with `expires soon` in the last minute (the last five on a 1-hour cache), and turns red once it has lapsed, with an estimate of what the next turn costs to re-read. It appears after the first reply. In `pulse` it is a thin bar that becomes a full amber bar near the end and a red outlined box once lapsed; in `chips` it earns an amber, then red, chip; in `ledger` it adds a draining segment to the rule that turns solid red.
 - **Notifications** pop up at 80%, 95% and 100% of any window or limit, once per window.
 - **Narrow bands** (under 100 terminal columns, or 70 on the desktop) drop reset times and shorten bars.
 - **Three styles**, switched with `/usagebar style <name>`:
@@ -158,6 +159,9 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 | `show_today` | on | Spend today, and this month when no cap is set. |
 | `show_session` | on | What this session has cost. |
 | `show_context` | on | How full the context window is. |
+| `show_cache` | on | The prompt-cache countdown. |
+| `cache_ttl` | `5m` | How long the cache lasts after a reply: `5m` or `1h`. |
+| `cache_write_usd_per_mtok` | `3.75` | Cache-write price per million tokens, for the re-read estimate once the cache has lapsed. `0` hides the estimate. |
 | `budget_usd` | `0` | Your own dollar limit. `0` is off. `/usagebar budget 200` sets it too. |
 | `budget_period` | `monthly` | `monthly`, `weekly` (from Monday) or `daily`. `/usagebar period weekly` sets it too. |
 | `org_limit_usd` | `0` | Your org's monthly spend cap in dollars. With a gateway that enforces it, it turns the gateway's percentage into dollars. Without one, it's compared with Claude Code's spend on this machine and shown as `org ≈$312 / $500`. |
@@ -171,7 +175,7 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 - `/usagebar` opens the details pane.
 - `/usagebar style <chips | ledger | pulse>` changes how the band looks. With no name, it says which style is on.
 - `/usagebar status` lists the settings the mod received, what Claude Code reports, and which cap it's showing. Start here when a number looks wrong.
-- `/usagebar hide <parts>`, `/usagebar show <parts>` and `/usagebar only <parts>` choose what the bar shows. Parts are `5h`, `7d`, `spend` (or `budget`, `cap`), `today`, `session` and `context` (or `ctx`). For example, `/usagebar hide 7d context`, or `/usagebar only budget`. `/usagebar show 5h 7d spend today session context` brings everything back.
+- `/usagebar hide <parts>`, `/usagebar show <parts>` and `/usagebar only <parts>` choose what the bar shows. Parts are `5h`, `7d`, `spend` (or `budget`, `cap`), `today`, `session`, `context` (or `ctx`) and `cache`. For example, `/usagebar hide 7d context`, or `/usagebar only budget`. `/usagebar show 5h 7d spend today session context cache` brings everything back.
 - `/usagebar refresh` re-reads the Admin API now.
 - `/usagebar budget <usd> [monthly | weekly | daily]` sets your personal budget, and its period if you name one (`0` turns the budget off).
 - `/usagebar period <monthly | weekly | daily>` changes when the budget resets. Weeks start Monday. `month`, `week` and `day` work too.

@@ -67,6 +67,29 @@
       "description": "How full the context window is. Off hides it from the bar; the /usagebar pane still shows it.",
       "default": true
     },
+    "show_cache": {
+      "type": "boolean",
+      "title": "Show cache countdown",
+      "description": "A countdown to when the prompt cache lapses. Amber in the last minute, red once it has, with what the next turn will cost to re-read. Appears after the first reply.",
+      "default": true
+    },
+    "cache_ttl": {
+      "type": "string",
+      "title": "Cache lifetime",
+      "description": "How long the prompt cache lasts after a reply: 5m is the default, 1h if your plan or setup uses the 1-hour cache.",
+      "options": [
+        "5m",
+        "1h"
+      ],
+      "default": "5m"
+    },
+    "cache_write_usd_per_mtok": {
+      "type": "number",
+      "title": "Cache write price (USD per million tokens)",
+      "description": "Used to estimate what the next turn costs once the cache has lapsed. Set it to your model's cache-write price; 0 hides the estimate.",
+      "default": 3.75,
+      "min": 0
+    },
     "budget_usd": {
       "type": "number",
       "title": "Personal budget (USD)",

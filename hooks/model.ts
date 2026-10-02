@@ -408,7 +408,7 @@ export function crossedAlerts(view: View, now: number): { key: string; text: str
 }
 
 /** The pieces of the bar a person can hide, each a `show_<part>` setting. */
-export const PARTS = ['5h', '7d', 'spend', 'today', 'session', 'context'] as const
+export const PARTS = ['5h', '7d', 'spend', 'today', 'session', 'context', 'cache'] as const
 export type Part = (typeof PARTS)[number]
 export type Shown = Record<Part, boolean>
 
@@ -427,6 +427,7 @@ const PART_WORDS: Record<string, Part> = {
   cost: 'session',
   context: 'context',
   ctx: 'context',
+  cache: 'cache',
 }
 
 export function parsePart(word: string): Part | undefined {
@@ -454,6 +455,46 @@ export function parseStyle(word: string): Style | undefined {
   const w = word.toLowerCase()
 
   return (STYLES as readonly string[]).includes(w) ? (w as Style) : undefined
+}
+
+/** How long the API keeps a prompt cache entry after its last use. */
+export const CACHE_TTL = { '5m': 5 * MINUTE, '1h': HOUR } as const
+export type CacheTtl = keyof typeof CACHE_TTL
+
+export function parseCacheTtl(word: string): CacheTtl {
+  return word === '1h' ? '1h' : '5m'
+}
+
+export type CacheState = {
+  /** calm while there is time, warm in the last stretch, hot once it has lapsed. */
+  level: Level
+  remainingMs: number
+  /** What is left of the TTL, 0 to 100. */
+  percent: number
+}
+
+/** Where the prompt cache stands: it lapses `ttlMs` after the last response. */
+export function cacheState(lastAt: number, ttlMs: number, now: number): CacheState {
+  const left = lastAt + ttlMs - now
+  const warnMs = ttlMs > 10 * MINUTE ? 5 * MINUTE : MINUTE
+
+  return {
+    level: left <= 0 ? 'hot' : left <= warnMs ? 'warm' : 'calm',
+    remainingMs: Math.max(0, left),
+    percent: clamp((left / ttlMs) * 100),
+  }
+}
+
+/** A countdown as m:ss, rounding up so it reads 0:01 until it really is over. */
+export function formatClock(ms: number): string {
+  const seconds = Math.ceil(Math.max(0, ms) / 1000)
+
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+/** What re-writing `tokens` of context into the cache costs at `usdPerMillion`. */
+export function cacheRewriteUsd(tokens: number, usdPerMillion: number): number {
+  return (tokens / 1_000_000) * usdPerMillion
 }
 
 /** A percentage that never reads 0% once anything is spent. */

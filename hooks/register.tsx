@@ -10,7 +10,11 @@ import {
   barCells,
   buildView,
   burnRate,
+  CACHE_TTL,
+  cacheRewriteUsd,
+  cacheState,
   crossedAlerts,
+  formatClock,
   formatDate,
   formatDuration,
   formatReset,
@@ -19,6 +23,7 @@ import {
   hitsFullIn,
   levelGlyph,
   MINUTE,
+  parseCacheTtl,
   parsePart,
   parseStyle,
   PARTS,
@@ -62,10 +67,15 @@ type Settings = Options & {
   adminWorkspaceId: string
   pollMinutes: number
   shown: Shown
+  cacheTtlMs: number
+  cacheWriteUsd: number
 }
+
+const DEFAULT_CACHE_WRITE_USD = 3.75
 
 function readSettings(options: Readonly<Record<string, unknown>>): Settings {
   const period = String(options.budget_period ?? 'monthly') as Period
+  const cacheWrite = Number(options.cache_write_usd_per_mtok ?? DEFAULT_CACHE_WRITE_USD)
 
   return {
     display: String(options.display ?? 'band'),
@@ -78,6 +88,8 @@ function readSettings(options: Readonly<Record<string, unknown>>): Settings {
     adminWorkspaceId: String(options.admin_workspace_id ?? '').trim(),
     pollMinutes: Math.max(1, Number(options.admin_poll_minutes ?? 5) || 5),
     shown: Object.fromEntries(PARTS.map(part => [part, options[`show_${part}`] !== false])) as Shown,
+    cacheTtlMs: CACHE_TTL[parseCacheTtl(String(options.cache_ttl ?? '5m'))],
+    cacheWriteUsd: Number.isFinite(cacheWrite) && cacheWrite >= 0 ? cacheWrite : DEFAULT_CACHE_WRITE_USD,
   }
 }
 
@@ -133,6 +145,20 @@ function pulseTicker($: EngineInterface, isOn: boolean) {
     pulseTimer.cancel()
     pulseTimer = undefined
   }
+}
+
+// The cache countdown: when the last main-thread response went out, which refreshes the cache entry.
+let cacheAt: number | undefined
+let cacheTimer: Timer | undefined
+
+/** Redraws the band as the cache countdown moves: every second near the end, every 5 s before. */
+async function tickCache($: EngineInterface) {
+  if (!isBand || !settings.shown.cache || cacheAt === undefined) return
+  const now = await $.clock.now()
+  // A lapsed cache has been drawn red already; it only changes with the next response.
+  if (now - (cacheAt + settings.cacheTtlMs) > 2000) return
+  const state = cacheState(cacheAt, settings.cacheTtlMs, now)
+  if (state.level !== 'calm' || Math.floor(state.remainingMs / 1000) % 5 === 0) $.ui.invalidate('ui.render')
 }
 
 function adminFetch($: EngineInterface): AdminFetch {
@@ -299,6 +325,11 @@ async function statusReport($: EngineInterface): Promise<string> {
   )
   const hidden = PARTS.filter(part => !settings.shown[part])
   lines.push(hidden.length > 0 ? `Hidden on the bar: ${hidden.join(', ')}` : 'Hidden on the bar: nothing')
+  lines.push(
+    cacheAt === undefined
+      ? `Prompt cache: no reply yet, so no countdown (${settings.cacheTtlMs === CACHE_TTL['1h'] ? '1h' : '5m'} TTL)`
+      : `Prompt cache: ${formatClock(cacheState(cacheAt, settings.cacheTtlMs, now).remainingMs)} left of ${settings.cacheTtlMs === CACHE_TTL['1h'] ? '1h' : '5m'}, last response ${formatDuration(now - cacheAt)} ago`,
+  )
   if (bandColumns !== undefined) lines.push(`Band width: ${bandColumns} columns`)
 
   return lines.join('\n')
@@ -313,6 +344,8 @@ export const register: Register = (on, options) => {
   adminKey = settings.adminKey
   pulseTimer?.cancel()
   pulseTimer = undefined
+  cacheTimer?.cancel()
+  cacheTimer = undefined
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -352,6 +385,7 @@ export const register: Register = (on, options) => {
       $.ui.invalidate('ui.render')
       void publish($)
     })
+    cacheTimer = $.clock.every(1000, () => void tickCache($))
     $.clock.every(10 * MINUTE, () => {
       void (async () => {
         const at = await $.clock.now()
@@ -365,6 +399,16 @@ export const register: Register = (on, options) => {
 
   on('session.measure', async ($, e, next) => {
     await absorb($, e)
+
+    return next(e)
+  })
+
+  // Each main-thread response that reached the API refreshes the cache entry.
+  on('turn.complete', async ($, e, next) => {
+    if (!e.agentId && e.usage) {
+      cacheAt = await $.clock.now()
+      $.ui.invalidate('ui.render')
+    }
 
     return next(e)
   })
@@ -517,6 +561,28 @@ export const register: Register = (on, options) => {
       ]
     }
     const figureLabel = (f: (typeof figures)[number]) => (isNarrow && f.isSession ? undefined : <Text dimColor>{f.label}</Text>)
+    // The cache countdown: calm and dim with time left, amber near the end, red once it has lapsed.
+    const cache = settings.shown.cache && cacheAt !== undefined ? cacheState(cacheAt, settings.cacheTtlMs, now) : undefined
+    const cacheTokens =
+      cache?.level === 'hot' ? ((await read($, snapshotAtom))?.contextTokens ?? (await $.session.usage()).context.tokens) : undefined
+    const cacheCost =
+      settings.cacheWriteUsd > 0 && cacheTokens ? `next turn ≈ ${formatUsd(cacheRewriteUsd(cacheTokens, settings.cacheWriteUsd))}` : 'next turn re-reads it all'
+    const cacheClock = cache ? formatClock(cache.remainingMs) : ''
+    const cacheTitle =
+      cache?.level === 'hot'
+        ? 'The prompt cache has lapsed; the next turn re-reads the whole context at full price'
+        : `The prompt cache lapses in ${cacheClock}`
+    const cacheLabel = cache && (
+      <Text color={toneOf(cache.level)} dimColor={cache.level === 'calm'}>
+        {cache.level === 'hot' ? '⚠ cache cold' : 'cache'}
+      </Text>
+    )
+    const cacheValue = cache && (
+      <Text bold color={toneOf(cache.level)}>
+        {cache.level === 'hot' ? cacheCost : cacheClock}
+      </Text>
+    )
+    const cacheNote = cache?.level === 'warm' ? <Text color={tone('warm')}>expires soon</Text> : undefined
     const ctxTitle = `context ${Math.round(ctx ?? 0)}% full`
     const ctxValue = (
       <Text bold color={toneOf(ctxLevel)}>
@@ -578,6 +644,21 @@ export const register: Register = (on, options) => {
           </Box>
         ),
       )
+      // Warm and lapsed caches earn a chip; with time left it is a plain dim countdown.
+      if (cache) {
+        items.push(
+          cache.level === 'calm' ? (
+            <Box gap={1}>
+              {cacheLabel}
+              {cacheValue}
+            </Box>
+          ) : cache.level === 'hot' ? (
+            chip('hot', [cacheLabel, cacheValue])
+          ) : (
+            chip('warm', [cacheLabel, meter(cache.percent, undefined, cacheTitle, tone('warm')), cacheValue, cacheNote])
+          ),
+        )
+      }
       const isCtxLoud = ctx !== undefined && isLoud(ctxLevel)
       const rest: RenderChildren[] = figures.map(f => (
         <Box gap={1}>
@@ -614,6 +695,13 @@ export const register: Register = (on, options) => {
               {isLoud(g.level) && extras(g)}
             </Box>
           ))}
+          {cache && (
+            <Box gap={1}>
+              {cacheLabel}
+              {cacheValue}
+              {cacheNote}
+            </Box>
+          )}
           <Box flexGrow={1} />
           {figures.map(f => (
             <Box gap={1}>
@@ -640,6 +728,17 @@ export const register: Register = (on, options) => {
           color: isLoud(g.level) ? tone(g.level) : quiet,
           title: titleOf(g),
         })),
+        // The cache drains; once lapsed its whole segment turns red.
+        ...(cache
+          ? [
+              {
+                percent: cache.level === 'hot' ? 100 : cache.percent,
+                pace: undefined,
+                color: isLoud(cache.level) ? tone(cache.level) : quiet,
+                title: cacheTitle,
+              },
+            ]
+          : []),
         ...(ctx !== undefined ? [{ percent: ctx, pace: undefined, color: isLoud(ctxLevel) ? ctxColor : quiet, title: ctxTitle }] : []),
       ]
       let rule
@@ -716,6 +815,20 @@ export const register: Register = (on, options) => {
             {isLoud(g.level) && extras(g)}
           </Box>
         ))}
+        {cache &&
+          (cache.level === 'hot' ? (
+            <Box borderStyle="round" borderColor={tone('hot')} paddingX={1} gap={1} alignItems="center">
+              {cacheLabel}
+              {cacheValue}
+            </Box>
+          ) : (
+            <Box gap={1} alignItems="center">
+              {cacheLabel}
+              {meter('cache', cache.percent, undefined, cache.level, cacheTitle, tone(cache.level), isLoud(cache.level) ? (isNarrow ? 52 : 72) : 28)}
+              {cacheValue}
+              {cacheNote}
+            </Box>
+          ))}
         <Box flexGrow={1} />
         {figures.map(f => (
           <Box gap={1} alignItems="center">

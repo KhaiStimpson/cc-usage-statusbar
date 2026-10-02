@@ -6,14 +6,18 @@ import {
   barCells,
   buildView,
   burnRate,
+  cacheRewriteUsd,
+  cacheState,
   crossedAlerts,
   DAY,
+  formatClock,
   formatDuration,
   formatUsd,
   gaugeNote,
   HOUR,
   levelGlyph,
   MINUTE,
+  parseCacheTtl,
   parseStyle,
   percentLabel,
   periodBounds,
@@ -353,5 +357,45 @@ describe('styles', () => {
     )
     expect(svg.match(/<g>/g)).toHaveLength(2)
     expect(svg).toContain('<rect x="208" y="4" width="200" height="3"')
+  })
+})
+
+describe('cache countdown', () => {
+  const last = NOW
+  const FIVE = 5 * MINUTE
+
+  test('calm with time left, warm in the last minute, hot once lapsed', () => {
+    expect(cacheState(last, FIVE, NOW + 3 * MINUTE).level).toBe('calm')
+    expect(cacheState(last, FIVE, NOW + 4 * MINUTE).level).toBe('warm')
+    expect(cacheState(last, FIVE, NOW + 5 * MINUTE).level).toBe('hot')
+    expect(cacheState(last, FIVE, NOW + 9 * MINUTE)).toMatchObject({ level: 'hot', remainingMs: 0, percent: 0 })
+  })
+
+  test('the one-hour cache warns five minutes out', () => {
+    expect(cacheState(last, HOUR, NOW + 54 * MINUTE).level).toBe('calm')
+    expect(cacheState(last, HOUR, NOW + 56 * MINUTE).level).toBe('warm')
+  })
+
+  test('percent is what is left of the lifetime', () => {
+    expect(cacheState(last, FIVE, NOW).percent).toBe(100)
+    expect(cacheState(last, FIVE, NOW + 150_000).percent).toBe(50)
+  })
+
+  test('the clock rounds up and stays m:ss', () => {
+    expect(formatClock(222_000)).toBe('3:42')
+    expect(formatClock(48_001)).toBe('0:49')
+    expect(formatClock(0)).toBe('0:00')
+    expect(formatClock(-5)).toBe('0:00')
+  })
+
+  test('a re-write costs the context at the cache-write price', () => {
+    expect(Math.round(cacheRewriteUsd(140_000, 3.75) * 1000)).toBe(525)
+    expect(cacheRewriteUsd(0, 3.75)).toBe(0)
+  })
+
+  test('the lifetime is 5m unless 1h is named', () => {
+    expect(parseCacheTtl('1h')).toBe('1h')
+    expect(parseCacheTtl('5m')).toBe('5m')
+    expect(parseCacheTtl('nonsense')).toBe('5m')
   })
 })

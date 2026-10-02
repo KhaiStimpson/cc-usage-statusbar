@@ -39,7 +39,7 @@ function HOURS(n: number) {
 
 /** The engine beneath the plugin: the clock, the store and the session's figures. */
 function world(on: On, usage: SessionUsage) {
-  mock.clock(on, { now: NOW })
+  const clock = mock.clock(on, { now: NOW })
   mock.store(on)
   on('session.usage', () => ({ value: usage }))
   on('session.id', () => ({ value: 'session-1' }))
@@ -56,7 +56,17 @@ function world(on: On, usage: SessionUsage) {
     return <Text>engine</Text>
   })
 
-  return { status, toasts }
+  return { status, toasts, clock }
+}
+
+/** A finished main-thread turn, which refreshes the prompt cache. */
+const TURN = {
+  answer: 'done',
+  durationMs: 4000,
+  isAborted: false,
+  turnId: 't1',
+  reason: 'end_turn' as const,
+  usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 6_000, model: 'm' },
 }
 
 const refresh = {
@@ -342,7 +352,7 @@ describe('parts of the bar', () => {
     world(on, SUBSCRIPTION)
     on('command.run', () => ({ text: '' }))
     const written: Record<string, unknown> = {}
-    const rows = ['5h', '7d', 'spend', 'today', 'session', 'context'].map(part => ({
+    const rows = ['5h', '7d', 'spend', 'today', 'session', 'context', 'cache'].map(part => ({
       key: `usage-statusbar@cc-usage-statusbar.show_${part}`,
       label: part,
       kind: 'boolean' as const,
@@ -359,10 +369,74 @@ describe('parts of the bar', () => {
 
     const ran = await $.command.run({ ...refresh, args: 'only budget' })
     expect(ran.text).toBe('The bar shows: spend.')
-    expect(written).toEqual({ show_5h: false, show_7d: false, show_today: false, show_session: false, show_context: false })
+    expect(written).toEqual({
+      show_5h: false,
+      show_7d: false,
+      show_today: false,
+      show_session: false,
+      show_context: false,
+      show_cache: false,
+    })
 
     const bad = await $.command.run({ ...refresh, args: 'hide weather' })
-    expect(bad.text).toBe('Unknown part: weather. Usage: /usagebar hide <part>..., where a part is 5h, 7d, spend, today, session, context.')
+    expect(bad.text).toBe('Unknown part: weather. Usage: /usagebar hide <part>..., where a part is 5h, 7d, spend, today, session, context, cache.')
+  })
+})
+
+describe('cache countdown', () => {
+  /** The engine's own end of a turn, beneath the plugin. */
+  const engine = (on: On) => on('turn.complete', () => ({ text: '' }))
+
+  test('nothing shows before the first reply', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    expect(await ui.find({ type: 'Text', text: 'cache' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  for (const style of ['pulse', 'chips', 'ledger'] as const) {
+    test(`${style}: counts down, warns in the last minute, then goes red`, { options: { style } }, async ($, on) => {
+      const { clock } = world(on, SUBSCRIPTION)
+      engine(on)
+      await $.turn.complete(TURN)
+
+      const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+      expect(await ui.find({ type: 'Text', text: 'cache' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: '5:00' })).toBeDefined()
+      await ui.unmount()
+
+      await clock.advance(MINUTES(4) + 15_000)
+      const warm = await $.ui.mount({ surface: 'terminal', ...band(160) })
+      expect(await warm.find({ type: 'Text', text: '0:45' })).toBeDefined()
+      expect(await warm.find({ type: 'Text', text: 'expires soon' })).toBeDefined()
+      await warm.unmount()
+
+      await clock.advance(MINUTES(1))
+      const cold = await $.ui.mount({ surface: 'terminal', ...band(160) })
+      expect(await cold.find({ type: 'Text', text: '⚠ cache cold' })).toBeDefined()
+      // 96,000 tokens at $3.75 per million.
+      expect(await cold.find({ type: 'Text', text: 'next turn ≈ $0.36' })).toBeDefined()
+      await cold.unmount()
+    })
+  }
+
+  test('a one-hour cache lasts an hour', { options: { cache_ttl: '1h' } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    engine(on)
+    await $.turn.complete(TURN)
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    expect(await ui.find({ type: 'Text', text: '60:00' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('hiding the part removes the countdown', { options: { show_cache: false } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    engine(on)
+    await $.turn.complete(TURN)
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    expect(await ui.find({ type: 'Text', text: 'cache' })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '62%' })).toBeDefined()
+    await ui.unmount()
   })
 })
 
