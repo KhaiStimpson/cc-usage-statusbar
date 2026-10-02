@@ -157,7 +157,8 @@ function amountGauge(
 
 /**
  * The spend limit to show, best source first: the Admin API's real figures,
- * the gateway's enforced limit, then the person's own budget.
+ * the gateway's enforced limit, the person's own budget, then the org cap
+ * counted against this machine's spend.
  */
 export function spendGauge(
   snapshot: Snapshot | null,
@@ -210,6 +211,13 @@ export function spendGauge(
     const { start, end } = periodBounds(options.budgetPeriod, now)
 
     return amountGauge('budget', local.periodUsd, options.budgetUsd, start, end, now, true)
+  }
+
+  // No server reports the cap: count it monthly against this machine's spend.
+  if (options.orgLimitUsd > 0 && local) {
+    const { start, end } = periodBounds('monthly', now)
+
+    return amountGauge('org', local.monthUsd, options.orgLimitUsd, start, end, now, true)
   }
 
   return undefined

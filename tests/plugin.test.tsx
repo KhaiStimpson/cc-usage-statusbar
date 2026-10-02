@@ -204,3 +204,24 @@ describe('admin api', () => {
     await pane.unmount()
   })
 })
+
+describe('status command', () => {
+  test('says what settings arrived and which cap is shown', { options: { org_limit_usd: 500 } }, async ($, on) => {
+    world(on, { ...GATEWAY, rateLimits: [] })
+    on('command.run', () => ({ text: '' }))
+    await $.session.measure({ context: GATEWAY.context, rateLimits: [], cost: { usd: 12 }, changed: ['cost'] })
+    const ran = await $.command.run({ ...refresh, args: 'status' })
+    expect(ran.text).toContain('org_limit_usd $500')
+    expect(ran.text).toContain('no rate-limit or spend-limit windows')
+    expect(ran.text).toContain('Cap shown: org ≈$12.00 / $500, counted from this machine')
+  })
+
+  test('the cap shows on the band for a subscription user on desktop', { options: { org_limit_usd: 500 } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    await $.session.measure({ ...SUBSCRIPTION, changed: ['cost'] })
+    const ui = await $.ui.mount({ surface: 'desktop', ...band(90) })
+    expect(await ui.find({ type: 'Text', text: '/ $500' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '62%' })).toBeDefined()
+    await ui.unmount()
+  })
+})

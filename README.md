@@ -30,10 +30,11 @@ The mod picks the best source it has:
 | A Claude subscription | The 5-hour and 7-day windows Claude Code reports | `5h` and `7d` bars, reset countdowns |
 | An Enterprise or Console org with an Admin API key | `GET /v1/organizations/spend_limits/effective` (Enterprise, per member), or `spend_limits` plus `cost_report` (Console org or workspace) | `org $420 / $500`, real figures, refreshed every 5 minutes |
 | A Claude gateway that enforces a spend limit | The `spend_limit` window Claude Code reports | `org 62%`, or dollars once you set `org_limit_usd` |
+| A monthly cap you set (`org_limit_usd`), with no gateway or Admin API | Claude Code's own cost, added up across sessions on this machine | `org ≈$312 / $500` |
 | A personal budget you set | Claude Code's own cost, added up across sessions on this machine | `budget ≈$82 / $200` (`≈` because only this machine counts) |
 | None of these | The same local tally | `month ≈$82  today $18.40  session $4.05` |
 
-The Admin API is read first, then the gateway, then your budget. Costs follow your organization's own model pricing when an admin has set it, and list prices otherwise.
+The Admin API is read first, then the gateway, then your budget, then the monthly cap counted on this machine. Costs follow your organization's own model pricing when an admin has set it, and list prices otherwise.
 
 ## Install
 
@@ -101,7 +102,7 @@ The Admin API key is the exception: don't put it in `settings.json`. Either ente
 "options": { "budget_usd": 200, "budget_period": "monthly" }
 ```
 
-**Your company's gateway enforces a $500/month limit.** The gateway reports a percentage, and the amount turns it into dollars: `org $312 / $500`.
+**Your org has a $500/month cap.** Shows `org $312 / $500`. If a Claude gateway enforces the cap, the figure is the gateway's own; otherwise it's counted from Claude Code's spend on this machine and marked `≈`.
 
 ```json
 "options": { "org_limit_usd": 500 }
@@ -132,7 +133,7 @@ The Admin API key is the exception: don't put it in `settings.json`. Either ente
 | `display` | `band` | `band` draws the colored line above the prompt. `status` uses the plain-text status line instead. `both` shows the two. |
 | `budget_usd` | `0` | Your own dollar limit. `0` is off. `/usagebar budget 200` sets it too. |
 | `budget_period` | `monthly` | `monthly`, `weekly` (from Monday) or `daily`. |
-| `org_limit_usd` | `0` | The dollar amount of your gateway's limit, so the percentage the gateway reports can be shown in dollars. |
+| `org_limit_usd` | `0` | Your org's monthly spend cap in dollars. With a gateway that enforces it, it turns the gateway's percentage into dollars. Without one, it's compared with Claude Code's spend on this machine and shown as `org ≈$312 / $500`. |
 | `admin_api_key` | — | An `sk-ant-admin…` key. Set it in `/plugin configure` or as `ANTHROPIC_ADMIN_KEY`, never in `settings.json`. |
 | `admin_user` | — | Enterprise: your `user_…` ID or email, to read your own effective limit. Leave it empty on a Console org. |
 | `admin_workspace_id` | — | Console: a `wrkspc_…` ID, to show that workspace's limit and spend instead of the whole org's. |
@@ -141,6 +142,7 @@ The Admin API key is the exception: don't put it in `settings.json`. Either ente
 ## Commands
 
 - `/usagebar` opens the details pane.
+- `/usagebar status` lists the settings the mod received, what Claude Code reports, and which cap it's showing. Start here when a number looks wrong.
 - `/usagebar refresh` re-reads the Admin API now.
 - `/usagebar budget <usd>` sets your personal budget (`0` turns it off).
 - `/usagebar close` closes the pane.

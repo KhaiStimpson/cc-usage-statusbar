@@ -1,7 +1,7 @@
 {
   "name": "usage-statusbar",
   "displayName": "Usage Status Bar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A slim colored line above the prompt with your real usage: subscription windows, org spend limits, budgets, context and cost",
   "author": {
     "name": "Khai Stimpson"
@@ -40,8 +40,8 @@
     },
     "org_limit_usd": {
       "type": "number",
-      "title": "Org spend limit (USD)",
-      "description": "Dollar amount of the spend limit your gateway enforces. The gateway only reports a percentage; this turns it into dollars. 0 shows the percentage alone.",
+      "title": "Monthly spend cap (USD)",
+      "description": "Your org's monthly spend cap in dollars. With a gateway that enforces it, converts the gateway's percentage to dollars; without one, it's compared with Claude Code's spend on this machine. 0 turns it off.",
       "default": 0,
       "min": 0
     },

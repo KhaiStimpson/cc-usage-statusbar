@@ -100,6 +100,8 @@ let isStatus = false
 let others: SessionLedger[] = []
 let own: SessionLedger | undefined
 let adminKey = ''
+// The band's width at its last draw, for /usagebar status.
+let bandColumns: number | undefined
 
 function adminFetch($: EngineInterface): AdminFetch {
   return (url, init) => $.http.fetch(url, init)
@@ -204,6 +206,48 @@ async function absorb($: EngineInterface, usage: Pick<SessionUsage, 'context' | 
   await publish($)
 }
 
+/** What the mod received and where each figure comes from, for /usagebar status. */
+async function statusReport($: EngineInterface): Promise<string> {
+  const now = await $.clock.now()
+  const view = await currentView($, now)
+  const snapshot = await read($, snapshotAtom)
+  const admin = await read($, adminAtom)
+  const spend = await read($, spendAtom)
+  const usd = (n: number) => (n > 0 ? formatUsd(n) : 'off')
+  const lines = [
+    `Settings: display ${settings.display} · budget_usd ${usd(settings.budgetUsd)} (${settings.budgetPeriod}) · org_limit_usd ${usd(settings.orgLimitUsd)} · Admin API key ${adminKey ? 'set' : 'not set'}${settings.adminUser ? ` · admin_user ${settings.adminUser}` : ''}${settings.adminWorkspaceId ? ` · workspace ${settings.adminWorkspaceId}` : ''}`,
+  ]
+  const kinds = (snapshot?.windows ?? []).map(w => `${w.kind} ${w.percentUsed}%`)
+  lines.push(
+    kinds.length > 0
+      ? `Reported by Claude Code: ${kinds.join(', ')}`
+      : 'Reported by Claude Code: no rate-limit or spend-limit windows (API pricing without a gateway limit, or no reply yet)',
+  )
+  if (adminKey) {
+    lines.push(
+      admin === null
+        ? 'Admin API: not read yet'
+        : admin.error
+          ? `Admin API: ${admin.error}`
+          : `Admin API: ${formatUsd(admin.spentUsd)}${admin.limitUsd ? ` of ${formatUsd(admin.limitUsd)}` : ', no limit set'} (${admin.scope}, ${admin.period}), read ${formatDuration(now - admin.at)} ago`,
+    )
+  }
+  if (spend) {
+    lines.push(
+      `This machine: ${formatUsd(spend.monthUsd)} this month, ${formatUsd(spend.todayUsd)} today, across ${others.length + (own ? 1 : 0)} sessions`,
+    )
+  }
+  const s = view.spend
+  lines.push(
+    s
+      ? `Cap shown: ${s.label} ${s.spentUsd !== undefined && s.limitUsd !== undefined ? `${s.isEstimate ? '≈' : ''}${formatUsd(s.spentUsd)} / ${formatUsd(s.limitUsd)}` : `${s.percent}%`}${s.isEstimate ? ', counted from this machine' : ''}`
+      : 'Cap shown: none. Set budget_usd or org_limit_usd, or an Admin API key.',
+  )
+  if (bandColumns !== undefined) lines.push(`Band width: ${bandColumns} columns`)
+
+  return lines.join('\n')
+}
+
 export const register: Register = (on, options) => {
   settings = readSettings(options)
   isBand = settings.display !== 'status'
@@ -220,7 +264,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: COMMAND,
       description: 'Usage details pane: windows, spend, forecast and cost per turn',
-      argumentHint: '[refresh | budget <usd> | close]',
+      argumentHint: '[status | refresh | budget <usd> | close]',
     })
 
     const sessionId = await $.session.id()
@@ -301,6 +345,7 @@ export const register: Register = (on, options) => {
 
       return { text: deny ? `Could not set the budget: ${deny}` : usd > 0 ? `Budget set to ${formatUsd(usd)} ${settings.budgetPeriod}.` : 'Budget turned off.' }
     }
+    if (verb === 'status') return { text: await statusReport($) }
     const opened = await $.ui.open({ id: PANE, title: 'Usage' })
 
     return { text: opened.isPlaced ? 'Usage pane opened.' : 'Usage pane opens once the terminal is wide enough.' }
@@ -314,6 +359,7 @@ export const register: Register = (on, options) => {
     const rate = burnRate(await read($, historyAtom), now)
     const { Box, Text } = $.ui.resolve(e)
     const columns = e.props.bodyColumns
+    bandColumns = columns
     const isNarrow = columns < 100
     const barWidth = columns >= 140 ? 10 : 8
 
@@ -371,7 +417,7 @@ export const register: Register = (on, options) => {
     const ctxLevel: Level = ctx === undefined ? 'calm' : ctx >= 90 ? 'hot' : ctx >= 75 ? 'warm' : 'calm'
 
     return (
-      <Box paddingX={1} gap={isNarrow ? 1 : 2}>
+      <Box paddingX={1} columnGap={isNarrow ? 1 : 2} flexWrap="wrap">
         {view.windows.map(g => gauge(g, barWidth))}
         {view.spend && gauge(view.spend, isNarrow ? barWidth : barWidth + 4)}
         {view.monthUsd !== undefined &&

@@ -127,6 +127,26 @@ describe('spend', () => {
     expect(view.todayUsd).toBe(18.4)
   })
 
+  test('an org cap with no server reporting it counts this machine monthly', () => {
+    const view = buildView(snapshot(), null, { todayUsd: 3, periodUsd: 3, monthUsd: 312, days: [] }, { ...OPTIONS, orgLimitUsd: 500 }, NOW)
+    expect(view.spend?.label).toBe('org')
+    expect(view.spend?.spentUsd).toBe(312)
+    expect(view.spend?.limitUsd).toBe(500)
+    expect(view.spend?.isEstimate).toBe(true)
+  })
+
+  test('subscription users see an org cap too', () => {
+    const view = buildView(
+      snapshot({ windows: [{ kind: 'five_hour', percentUsed: 62 }] }),
+      null,
+      { todayUsd: 3, periodUsd: 3, monthUsd: 40, days: [] },
+      { ...OPTIONS, orgLimitUsd: 500 },
+      NOW,
+    )
+    expect(view.windows).toHaveLength(1)
+    expect(view.spend?.limitUsd).toBe(500)
+  })
+
   test('no limit known shows month spend and no gauge', () => {
     const view = buildView(snapshot(), null, { todayUsd: 3, periodUsd: 82, monthUsd: 82, days: [] }, OPTIONS, NOW)
     expect(view.spend).toBeUndefined()
