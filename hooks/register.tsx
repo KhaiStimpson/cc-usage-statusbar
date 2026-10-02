@@ -36,7 +36,8 @@ import {
   visibleView,
 } from './model'
 import type { Gauge, Options, Part, Shown, Style, View } from './model'
-import { barSvg, cacheClockSvg, liveDotSvg, ruleSvg, sparkSvg, SVG_COLOR, SVG_QUIET } from './svg'
+import type { PillPart } from './svg'
+import { barSvg, cacheClockSvg, liveDotSvg, pillSvg, ruleSvg, sparkSvg, SVG_COLOR, SVG_QUIET } from './svg'
 
 const PANE = 'usage-statusbar'
 const COMMAND = 'usagebar'
@@ -56,14 +57,6 @@ const COLOR: Record<Level | 'ctx' | 'quiet' | 'track' | 'tick', string> = {
   ctx: '#8a9fc0',
   track: '#3a3a40',
   tick: '#e6e3da',
-}
-
-// Pill fills. The desktop paints an absolute Box over the text, so the fill is translucent and the
-// text reads through it on either a light or a dark band.
-const FILL: Record<Level, string> = {
-  calm: 'rgba(138, 135, 127, 0.38)',
-  warm: 'rgba(212, 146, 58, 0.5)',
-  hot: 'rgba(217, 86, 63, 0.55)',
 }
 
 const PERIODS: readonly Period[] = ['daily', 'weekly', 'monthly']
@@ -732,12 +725,12 @@ export const register: Register = (on, options) => {
     ))
 
     if (style === 'chips') {
-      // A pill on the desktop: the gauge's text with its percentage tinted in over it. The terminal has no
-      // translucent fill, so there it is the text in the level's colour with a short bar.
+      // A pill on the desktop is one drawing: a rounded track, a fill to the percentage and the text on top.
+      // The terminal has no such drawing, so there it is the text in the level's colour with a short bar.
       const pill = (e: Entry) => {
-        const fill = Math.min(100, Math.max(0, Math.round(e.percent)))
         if (!Svg) {
           const color = isLoud(e.level) ? tone(e.level) : quiet
+
           return (
             <Box gap={1}>
               {entryParts(e, false).slice(0, 1)}
@@ -746,15 +739,22 @@ export const register: Register = (on, options) => {
             </Box>
           )
         }
+        const parts: PillPart[] = [
+          { text: e.label, style: 'label' },
+          e.isClock ? { clock: true } : { text: e.value, style: 'value' },
+          ...(e.limit ? [{ text: e.limit, style: 'dim' as const }] : []),
+          ...(e.note ? [{ text: e.note, style: 'label' as const }] : []),
+          ...(e.reset ? [{ text: e.reset, style: 'dim' as const }] : []),
+        ]
+        const { source, width } = pillSvg({
+          parts,
+          percent: e.percent,
+          level: e.level,
+          title: e.title,
+          clock: e.isClock && cache ? { remainingMs: cache.remainingMs, warnMs: cacheWarnMs(settings.cacheTtlMs) } : undefined,
+        })
 
-        return (
-          <Box paddingX={1} gap={1}>
-            {entryParts(e, true)}
-            {fill > 0 && (
-              <Box position="absolute" left={0} top={0} bottom={0} width={`${Math.max(1, fill)}%`} backgroundColor={FILL[e.level]} />
-            )}
-          </Box>
-        )
+        return svg(source, e.title, width, 20, false)
       }
 
       return (

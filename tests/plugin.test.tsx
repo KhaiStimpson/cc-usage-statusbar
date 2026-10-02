@@ -505,13 +505,17 @@ describe('styles', () => {
       await $.session.measure({ ...SUBSCRIPTION, changed: ['cost'] })
       for (const surface of ['terminal', 'desktop'] as const) {
         const ui = await $.ui.mount({ surface, ...band(160) })
-        expect(await ui.find({ type: 'Text', text: '5h' })).toBeDefined()
-        expect(await ui.find({ type: 'Text', text: '62%' })).toBeDefined()
-        expect(await ui.find({ type: 'Text', text: 'budget' })).toBeDefined()
         expect(await ui.find({ type: 'Text', text: '$1.82' })).toBeDefined()
-        // Calm chips are plain text, so they draw no bar at all.
-        const hasSvg = surface === 'desktop' && style !== 'chips'
-        expect(await ui.find({ type: 'Svg' }))[hasSvg ? 'toBeDefined' : 'toBeUndefined']()
+        if (surface === 'desktop' && style === 'chips') {
+          // Chips on the desktop draw each gauge's words inside its pill drawing.
+          const drawn = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source)).join('')
+          for (const word of ['>5h<', '>62%<', '>budget<']) expect(drawn).toContain(word)
+        } else {
+          expect(await ui.find({ type: 'Text', text: '5h' })).toBeDefined()
+          expect(await ui.find({ type: 'Text', text: '62%' })).toBeDefined()
+          expect(await ui.find({ type: 'Text', text: 'budget' })).toBeDefined()
+          expect(await ui.find({ type: 'Svg' }))[surface === 'desktop' ? 'toBeDefined' : 'toBeUndefined']()
+        }
         await ui.unmount()
       }
     })
@@ -529,26 +533,28 @@ describe('styles', () => {
     await idle.unmount()
   })
 
-  /** The fills drawn behind a pill's text, by colour. */
-  const fills = async (ui: Awaited<ReturnType<typeof $.ui.mount>>) =>
-    (await ui.findAll({ type: 'Box' })).filter(b => b.props.position === 'absolute').map(b => b.props)
+  /** The pill drawings on the desktop, as their markup. */
+  const pills = async (ui: Awaited<ReturnType<typeof $.ui.mount>>) =>
+    (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source))
 
-  test('chips fill each gauge to its percentage, in grey while calm', { options: { style: 'chips' } }, async ($, on) => {
+  test('chips draw each gauge as a pill filled to its percentage, grey while calm', { options: { style: 'chips' } }, async ($, on) => {
     world(on, SUBSCRIPTION)
     const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
-    const drawn = await fills(ui)
+    const drawn = await pills(ui)
     // 5h, 7d and ctx.
-    expect(drawn.map(f => f.width)).toEqual(['62%', '31%', '48%'])
-    expect(new Set(drawn.map(f => f.backgroundColor))).toEqual(new Set(['rgba(138, 135, 127, 0.38)']))
+    expect(drawn).toHaveLength(3)
+    for (const source of drawn) expect(source).toContain('rgba(128,128,128,0.45)')
+    expect(drawn[0]).toContain('>5h<')
+    expect(drawn[0]).toContain('>62%<')
     await ui.unmount()
   })
 
   test('a loud gauge fills amber', { options: { style: 'chips' } }, async ($, on) => {
     world(on, BUSY)
     const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
-    const drawn = await fills(ui)
-    expect(drawn[0]).toMatchObject({ width: '83%', backgroundColor: 'rgba(212, 146, 58, 0.5)' })
-    expect(drawn[1]).toMatchObject({ width: '31%', backgroundColor: 'rgba(138, 135, 127, 0.38)' })
+    const drawn = await pills(ui)
+    expect(drawn[0]).toContain('rgba(212,146,58,0.62)')
+    expect(drawn[1]).toContain('rgba(128,128,128,0.45)')
     await ui.unmount()
   })
 
@@ -558,7 +564,8 @@ describe('styles', () => {
     await $.turn.complete(TURN)
     await clock.advance(MINUTES(6))
     const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
-    expect((await fills(ui)).find(f => f.backgroundColor === 'rgba(217, 86, 63, 0.55)')).toMatchObject({ width: '100%' })
+    const red = (await pills(ui)).find(src => src.includes('rgba(217,86,63,0.66)'))
+    expect(red).toContain('⚠ cache cold')
     await ui.unmount()
   })
 

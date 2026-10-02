@@ -196,3 +196,94 @@ export function cacheClockSvg({ remainingMs, warnMs, color, title, hasBar, hasHa
     `${bar}${texts.join('')}</svg>`
   )
 }
+
+const NARROW_CHARS = "il.,:;'|!/ ()[]·"
+const WIDE_CHARS = 'mwMW%⚠≈'
+
+/** A rough width in px for 13 px system text; the pill draws its own text, so a miss only changes the padding. */
+function textWidth(text: string, isBold: boolean): number {
+  let w = 0
+  for (const ch of text.split('')) {
+    if (NARROW_CHARS.includes(ch)) w += 3.6
+    else if (WIDE_CHARS.includes(ch)) w += 11
+    else if (ch >= '0' && ch <= '9') w += 7.4
+    else if (ch >= 'A' && ch <= 'Z') w += 8.6
+    else w += 6.9
+  }
+
+  return Math.ceil(w * (isBold ? 1.05 : 1))
+}
+
+export type PillPart = { text: string; style: 'label' | 'value' | 'dim' } | { clock: true }
+
+export type PillSvg = {
+  parts: readonly PillPart[]
+  /** How far the pill is filled, 0 to 100. */
+  percent: number
+  level: Level
+  title: string
+  /** The warm cache's countdown, drawn by the `clock` part. */
+  clock?: { remainingMs: number; warnMs: number }
+}
+
+const PILL_FILL: Record<Level, string> = {
+  calm: 'rgba(128,128,128,0.45)',
+  warm: 'rgba(212,146,58,0.62)',
+  hot: 'rgba(217,86,63,0.66)',
+}
+const CLOCK_WIDTH = 30
+
+/**
+ * One gauge as a rounded pill: a faint track, a fill to its percentage, and its text on top, all in one
+ * drawing so the fill and the words always line up. The text follows the viewer's light or dark preference.
+ */
+export function pillSvg({ parts, percent, level, title, clock }: PillSvg): { source: string; width: number } {
+  const h = 20
+  const pad = 11
+  const gap = 7
+  let x = pad
+  const texts: string[] = []
+  let css = ''
+  parts.forEach((part, i) => {
+    if (i > 0) x += gap
+    if ('clock' in part) {
+      if (!clock) return
+      const warnS = clock.warnMs / 1000
+      const left = Math.min(Math.max(0, clock.remainingMs) / 1000, warnS)
+      const elapsed = r1(warnS - left)
+      const first = Math.ceil(left)
+      for (let v = first; v >= 0; v--) {
+        const delay = r1(warnS - v - elapsed)
+        texts.push(
+          `<text class="t v" x="${x}" y="14.5" style="animation-delay:${delay}s${v === first ? ';opacity:1' : ''}">${formatClock(v * 1000)}</text>`,
+        )
+      }
+      css = '.t{font-variant-numeric:tabular-nums;opacity:0;animation:k 1s steps(1,end) forwards}@keyframes k{0%{opacity:1}100%{opacity:0}}'
+      x += CLOCK_WIDTH
+
+      return
+    }
+    const isBold = part.style === 'value'
+    texts.push(
+      `<text class="${isBold ? 'v' : 'd'}" x="${x}" y="14.5"${isBold ? ' font-weight="600"' : ''}>${esc(part.text)}</text>`,
+    )
+    x += textWidth(part.text, isBold)
+  })
+  const width = Math.round(x + pad)
+  const fw = percent <= 0 ? 0 : r1(Math.max(h / 2, (clamp(percent) / 100) * width))
+
+  const source =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}">` +
+    `<title>${esc(title)}</title>` +
+    '<style>' +
+    "text{font:13px system-ui,-apple-system,'Segoe UI',sans-serif}" +
+    '.v{fill:#1d1d1b}.d{fill:#6b6a65}' +
+    '@media (prefers-color-scheme:dark){.v{fill:#ecebe6}.d{fill:#9a988f}}' +
+    `${css}${REDUCED}</style>` +
+    `<clipPath id="p"><rect x="0" y="0" width="${width}" height="${h}" rx="${h / 2}"/></clipPath>` +
+    `<rect x="0" y="0" width="${width}" height="${h}" rx="${h / 2}" ${TRACK}/>` +
+    (fw > 0 ? `<g clip-path="url(#p)"><rect x="0" y="0" width="${fw}" height="${h}" fill="${PILL_FILL[level]}"/></g>` : '') +
+    `${texts.join('')}</svg>`
+
+  return { source, width }
+}
