@@ -51,7 +51,7 @@ claude plugin marketplace add KhaiStimpson/cc-usage-statusbar
 claude plugin install usage-statusbar@cc-usage-statusbar
 ```
 
-Run `/plugin configure usage-statusbar@cc-usage-statusbar` to set a budget, your gateway's limit or an Admin API key. Everything is optional.
+To set a budget, your gateway's limit or an Admin API key, see [Settings](#settings). Everything is optional.
 
 To get updates, run `/plugin marketplace update cc-usage-statusbar`. The plugin's `version` in `.claude-plugin/plugin.json` decides when an update reaches users, so bump it with every release.
 
@@ -59,7 +59,73 @@ To try a local checkout without installing it, run `claude --plugin-dir ./cc-usa
 
 ## Settings
 
-Change these in `/config` (the Admin API key is entered when the plugin is enabled and kept in secure storage):
+Every setting is optional. With none set, you get the subscription windows (or your month's spend on API pricing), session cost and context.
+
+### Where to set them
+
+Pick one of these three:
+
+1. **Inside Claude Code:** run `/plugin configure usage-statusbar@cc-usage-statusbar` and fill in the dialog. After that, every setting except the Admin API key also shows up as a row in `/config`.
+2. **When installing, from your shell:** pass `--config` once per setting.
+
+   ```sh
+   claude plugin install usage-statusbar@cc-usage-statusbar \
+     --config budget_usd=200 --config budget_period=weekly
+   ```
+
+3. **By hand:** edit `~/.claude/settings.json` (your user settings; Claude Code ignores this key in a project's `.claude/settings.json`). Settings go under `pluginConfigs`, keyed by `usage-statusbar@cc-usage-statusbar`, inside an `options` object. Merge this into the file's existing top-level object rather than replacing it:
+
+   ```json
+   {
+     "pluginConfigs": {
+       "usage-statusbar@cc-usage-statusbar": {
+         "options": {
+           "display": "band",
+           "budget_usd": 200,
+           "budget_period": "monthly"
+         }
+       }
+     }
+   }
+   ```
+
+   Changes made through `/config` apply right away. If a running session misses a hand edit, restart it.
+
+The Admin API key is the exception: don't put it in `settings.json`. Either enter it in `/plugin configure`, which keeps it in your system's secure credential store, or export it as `ANTHROPIC_ADMIN_KEY` in the shell you start Claude Code from.
+
+### Examples by setup
+
+**Pay-per-token with your own budget.** Shows `budget ≈$82 / $200`, counted from Claude Code's cost on this machine:
+
+```json
+"options": { "budget_usd": 200, "budget_period": "monthly" }
+```
+
+**Your company's gateway enforces a $500/month limit.** The gateway reports a percentage, and the amount turns it into dollars: `org $312 / $500`.
+
+```json
+"options": { "org_limit_usd": 500 }
+```
+
+**Claude Enterprise, reading your own limit from the Admin API.** Put the key in `/plugin configure` or `ANTHROPIC_ADMIN_KEY`, then:
+
+```json
+"options": { "admin_user": "you@company.com" }
+```
+
+**Console organization, one workspace's limit.** With the key set the same way:
+
+```json
+"options": { "admin_workspace_id": "wrkspc_01AbCdEf", "admin_poll_minutes": 10 }
+```
+
+**Plain-text status line instead of the colored row:**
+
+```json
+"options": { "display": "status" }
+```
+
+### All settings
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -67,7 +133,7 @@ Change these in `/config` (the Admin API key is entered when the plugin is enabl
 | `budget_usd` | `0` | Your own dollar limit. `0` is off. `/usagebar budget 200` sets it too. |
 | `budget_period` | `monthly` | `monthly`, `weekly` (from Monday) or `daily`. |
 | `org_limit_usd` | `0` | The dollar amount of your gateway's limit, so the percentage the gateway reports can be shown in dollars. |
-| `admin_api_key` | — | An `sk-ant-admin…` key. The `ANTHROPIC_ADMIN_KEY` environment variable works too. |
+| `admin_api_key` | — | An `sk-ant-admin…` key. Set it in `/plugin configure` or as `ANTHROPIC_ADMIN_KEY`, never in `settings.json`. |
 | `admin_user` | — | Enterprise: your `user_…` ID or email, to read your own effective limit. Leave it empty on a Console org. |
 | `admin_workspace_id` | — | Console: a `wrkspc_…` ID, to show that workspace's limit and spend instead of the whole org's. |
 | `admin_poll_minutes` | `5` | How often to re-read the Admin API. |
