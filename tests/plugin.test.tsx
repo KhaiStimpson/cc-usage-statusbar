@@ -539,7 +539,7 @@ describe('styles', () => {
     const drawn = await fills(ui)
     // 5h, 7d and ctx.
     expect(drawn.map(f => f.width)).toEqual(['62%', '31%', '48%'])
-    expect(new Set(drawn.map(f => f.backgroundColor))).toEqual(new Set(['#8a877f']))
+    expect(new Set(drawn.map(f => f.backgroundColor))).toEqual(new Set(['rgba(138, 135, 127, 0.38)']))
     await ui.unmount()
   })
 
@@ -547,8 +547,8 @@ describe('styles', () => {
     world(on, BUSY)
     const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
     const drawn = await fills(ui)
-    expect(drawn[0]).toMatchObject({ width: '83%', backgroundColor: '#b9791f' })
-    expect(drawn[1]).toMatchObject({ width: '31%', backgroundColor: '#8a877f' })
+    expect(drawn[0]).toMatchObject({ width: '83%', backgroundColor: 'rgba(212, 146, 58, 0.5)' })
+    expect(drawn[1]).toMatchObject({ width: '31%', backgroundColor: 'rgba(138, 135, 127, 0.38)' })
     await ui.unmount()
   })
 
@@ -558,7 +558,7 @@ describe('styles', () => {
     await $.turn.complete(TURN)
     await clock.advance(MINUTES(6))
     const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
-    expect((await fills(ui)).find(f => f.backgroundColor === '#c4472f')).toMatchObject({ width: '100%' })
+    expect((await fills(ui)).find(f => f.backgroundColor === 'rgba(217, 86, 63, 0.55)')).toMatchObject({ width: '100%' })
     await ui.unmount()
   })
 

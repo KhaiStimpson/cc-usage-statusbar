@@ -155,6 +155,8 @@ export type CacheClockSvg = {
   color: string
   title: string
   hasBar: boolean
+  /** White digits with a dark outline, for sitting on a tinted fill of either theme. */
+  hasHalo?: boolean
 }
 
 /**
@@ -162,7 +164,7 @@ export type CacheClockSvg = {
  * CSS alone, so the band need not redraw every second. Each second is its own `<text>` shown for that
  * second; with reduced motion the animation is off and it holds the value it was drawn at.
  */
-export function cacheClockSvg({ remainingMs, warnMs, color, title, hasBar }: CacheClockSvg): string {
+export function cacheClockSvg({ remainingMs, warnMs, color, title, hasBar, hasHalo }: CacheClockSvg): string {
   const h = 16
   const barW = hasBar ? 72 : 0
   const textX = hasBar ? barW + 8 : 0
@@ -186,7 +188,7 @@ export function cacheClockSvg({ remainingMs, warnMs, color, title, hasBar }: Cac
     `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
     `<title>${esc(title)}</title>` +
     '<style>' +
-    `.t{font:600 13px system-ui,-apple-system,'Segoe UI',sans-serif;font-variant-numeric:tabular-nums;fill:${color};opacity:0;animation:v 1s steps(1,end) forwards}` +
+    `.t{font:600 13px system-ui,-apple-system,'Segoe UI',sans-serif;font-variant-numeric:tabular-nums;${hasHalo ? 'fill:#fff;stroke:#14110f;stroke-width:2.5px;paint-order:stroke;stroke-linejoin:round' : `fill:${color}`};opacity:0;animation:v 1s steps(1,end) forwards}` +
     '@keyframes v{0%{opacity:1}100%{opacity:0}}' +
     `.b{transform-box:fill-box;transform-origin:left center;animation:d ${r1(left)}s linear forwards}` +
     `@keyframes d{from{transform:scaleX(${r1(left / warnS * 100) / 100})}to{transform:scaleX(0)}}` +

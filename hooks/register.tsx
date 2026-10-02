@@ -58,11 +58,12 @@ const COLOR: Record<Level | 'ctx' | 'quiet' | 'track' | 'tick', string> = {
   tick: '#e6e3da',
 }
 
-// Pill fills: mid-tones that keep the theme's text readable on either a light or a dark band.
+// Pill fills. The desktop paints an absolute Box over the text, so the fill is translucent and the
+// text reads through it on either a light or a dark band.
 const FILL: Record<Level, string> = {
-  calm: '#8a877f',
-  warm: '#b9791f',
-  hot: '#c4472f',
+  calm: 'rgba(138, 135, 127, 0.38)',
+  warm: 'rgba(212, 146, 58, 0.5)',
+  hot: 'rgba(217, 86, 63, 0.55)',
 }
 
 const PERIODS: readonly Period[] = ['daily', 'weekly', 'monthly']
@@ -636,10 +637,10 @@ export const register: Register = (on, options) => {
     const svg = (source: string, alt: string, width: number | undefined, height: number, isInteractive = true) =>
       Svg ? <Svg source={source} alt={alt} width={width} height={height} isInteractive={isInteractive} /> : undefined
     // The warm cache on the desktop: bar and digits in one self-running drawing (see cacheClockSvg).
-    const cacheWarm = (hasBar: boolean, color = tone('warm')) =>
+    const cacheWarm = (hasBar: boolean, color = tone('warm'), hasHalo = false) =>
       cache && Svg
         ? svg(
-            cacheClockSvg({ remainingMs: cache.remainingMs, warnMs: cacheWarnMs(settings.cacheTtlMs), color, title: cacheTitle, hasBar }),
+            cacheClockSvg({ remainingMs: cache.remainingMs, warnMs: cacheWarnMs(settings.cacheTtlMs), color, title: cacheTitle, hasBar, hasHalo }),
             cacheTitle,
             hasBar ? 114 : 34,
             16,
@@ -702,8 +703,8 @@ export const register: Register = (on, options) => {
         ? [{ id: 'ctx', label: 'ctx', value: `${Math.round(ctx)}%`, level: ctxLevel, percent: ctx, title: ctxTitle }]
         : []),
     ]
+    const quiet = isTerminal ? COLOR.quiet : SVG_QUIET
     // On a fill the text keeps the theme's own colour; the fill carries the level.
-    const CLOCK_ON_FILL = '#14110f'
     const entryParts = (e: Entry, isOnFill: boolean) => {
       const tint = isOnFill ? undefined : toneOf(e.level)
 
@@ -712,7 +713,7 @@ export const register: Register = (on, options) => {
           {e.label}
         </Text>,
         e.isClock ? (
-          cacheWarm(false, isOnFill ? CLOCK_ON_FILL : tone('warm'))
+          cacheWarm(false, tone('warm'), isOnFill)
         ) : (
           <Text bold color={tint}>
             {e.value}
@@ -731,16 +732,27 @@ export const register: Register = (on, options) => {
     ))
 
     if (style === 'chips') {
-      // A pill: the gauge's text with its percentage filled in behind it.
+      // A pill on the desktop: the gauge's text with its percentage tinted in over it. The terminal has no
+      // translucent fill, so there it is the text in the level's colour with a short bar.
       const pill = (e: Entry) => {
         const fill = Math.min(100, Math.max(0, Math.round(e.percent)))
+        if (!Svg) {
+          const color = isLoud(e.level) ? tone(e.level) : quiet
+          return (
+            <Box gap={1}>
+              {entryParts(e, false).slice(0, 1)}
+              {!isNarrow && cellBar(e.percent, 6, e.pace, color)}
+              {entryParts(e, false).slice(1)}
+            </Box>
+          )
+        }
 
         return (
           <Box paddingX={1} gap={1}>
+            {entryParts(e, true)}
             {fill > 0 && (
               <Box position="absolute" left={0} top={0} bottom={0} width={`${Math.max(1, fill)}%`} backgroundColor={FILL[e.level]} />
             )}
-            {entryParts(e, true)}
           </Box>
         )
       }
@@ -756,7 +768,6 @@ export const register: Register = (on, options) => {
 
     if (style === 'ledger') {
       // Each gauge is a column: its text, with its own bar directly beneath at the same width.
-      const quiet = isTerminal ? COLOR.quiet : SVG_QUIET
       const column = (e: Entry) => {
         const parts = [e.label, e.isClock ? '00:00' : e.value, e.limit, e.note, e.reset].filter((p): p is string => !!p)
         const width = Math.max(10, parts.reduce((n, p) => n + p.length, 0) + parts.length)
