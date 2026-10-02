@@ -473,10 +473,15 @@ export type CacheState = {
   percent: number
 }
 
+/** How long before it lapses the cache turns amber: the last minute, or five on a 1-hour cache. */
+export function cacheWarnMs(ttlMs: number): number {
+  return ttlMs > 10 * MINUTE ? 5 * MINUTE : MINUTE
+}
+
 /** Where the prompt cache stands: it lapses `ttlMs` after the last response. */
 export function cacheState(lastAt: number, ttlMs: number, now: number): CacheState {
   const left = lastAt + ttlMs - now
-  const warnMs = ttlMs > 10 * MINUTE ? 5 * MINUTE : MINUTE
+  const warnMs = cacheWarnMs(ttlMs)
 
   return {
     level: left <= 0 ? 'hot' : left <= warnMs ? 'warm' : 'calm',

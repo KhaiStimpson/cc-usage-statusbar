@@ -420,6 +420,22 @@ describe('cache countdown', () => {
     })
   }
 
+  test('on the desktop a calm cache reads in minutes and a warm one runs itself', async ($, on) => {
+    const { clock } = world(on, SUBSCRIPTION)
+    engine(on)
+    await $.turn.complete(TURN)
+
+    const calm = await $.ui.mount({ surface: 'desktop', ...band(160) })
+    expect(await calm.find({ type: 'Text', text: '5m' })).toBeDefined()
+    await calm.unmount()
+
+    await clock.advance(MINUTES(4) + 15_000)
+    const warm = await $.ui.mount({ surface: 'desktop', ...band(160) })
+    expect(await warm.find({ type: 'Text', text: 'expires soon' })).toBeDefined()
+    expect(await warm.find({ type: 'Svg', source: /class="t"[^>]*>0:45</ })).toBeDefined()
+    await warm.unmount()
+  })
+
   test('a one-hour cache lasts an hour', { options: { cache_ttl: '1h' } }, async ($, on) => {
     world(on, SUBSCRIPTION)
     engine(on)

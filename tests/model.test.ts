@@ -26,7 +26,7 @@ import {
   statusText,
   windowGauge,
 } from '../hooks/model'
-import { barSvg, liveDotSvg, ruleSvg } from '../hooks/svg'
+import { barSvg, cacheClockSvg, liveDotSvg, ruleSvg } from '../hooks/svg'
 import type { Snapshot } from '../types'
 
 const NOW = new Date(2026, 9, 14, 15, 0, 0).getTime() // Wed Oct 14, 3pm local
@@ -397,5 +397,31 @@ describe('cache countdown', () => {
     expect(parseCacheTtl('1h')).toBe('1h')
     expect(parseCacheTtl('5m')).toBe('5m')
     expect(parseCacheTtl('nonsense')).toBe('5m')
+  })
+})
+
+describe('cache clock drawing', () => {
+  const draw = (remainingMs: number, hasBar = true) =>
+    cacheClockSvg({ remainingMs, warnMs: MINUTE, color: '#d4923a', title: 't', hasBar })
+
+  test('one text per second left, the current one showing at rest', () => {
+    const svg = draw(45_000)
+    expect(svg.match(/<text/g)).toHaveLength(46)
+    expect(svg).toContain('animation-delay:0s;opacity:1">0:45')
+    expect(svg).toContain('animation-delay:1s">0:44')
+    expect(svg).toContain('>0:00</text>')
+  })
+
+  test('the bar drains over what is left and the animation honors reduced motion', () => {
+    const svg = draw(45_000)
+    expect(svg).toContain('animation:d 45s linear')
+    expect(svg).toContain('scaleX(0.75)')
+    expect(svg).toContain('prefers-reduced-motion')
+  })
+
+  test('without a bar there is only the digits', () => {
+    const svg = draw(45_000, false)
+    expect(svg).not.toContain('class="b"')
+    expect(svg).toContain('width="34"')
   })
 })

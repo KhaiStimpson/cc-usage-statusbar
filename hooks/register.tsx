@@ -13,6 +13,7 @@ import {
   CACHE_TTL,
   cacheRewriteUsd,
   cacheState,
+  cacheWarnMs,
   crossedAlerts,
   formatClock,
   formatDate,
@@ -35,7 +36,7 @@ import {
   visibleView,
 } from './model'
 import type { Gauge, Options, Part, Shown, Style, View } from './model'
-import { barSvg, liveDotSvg, ruleSvg, sparkSvg, SVG_COLOR, SVG_QUIET } from './svg'
+import { barSvg, cacheClockSvg, liveDotSvg, ruleSvg, sparkSvg, SVG_COLOR, SVG_QUIET } from './svg'
 
 const PANE = 'usage-statusbar'
 const COMMAND = 'usagebar'
@@ -151,14 +152,26 @@ function pulseTicker($: EngineInterface, isOn: boolean) {
 let cacheAt: number | undefined
 let cacheTimer: Timer | undefined
 
-/** Redraws the band as the cache countdown moves: every second near the end, every 10 s before. */
+// What the band last drew of the cache, so the timer redraws only when something visible changes.
+let cacheDrawn: { level: Level; minutes: number; isSvg: boolean } | undefined
+
+/**
+ * Redraws the band when the cache countdown changes what it shows. A redraw flashes the whole band, so on the
+ * desktop the last minute runs itself inside one drawing and only a new stage or minute redraws; the terminal
+ * has no such drawing and redraws every second near the end and every 10 s before.
+ */
 async function tickCache($: EngineInterface) {
-  if (!isBand || !settings.shown.cache || cacheAt === undefined) return
+  if (!isBand || !settings.shown.cache || cacheAt === undefined || cacheDrawn === undefined) return
   const now = await $.clock.now()
   // A lapsed cache has been drawn red already; it only changes with the next response.
   if (now - (cacheAt + settings.cacheTtlMs) > 2000) return
   const state = cacheState(cacheAt, settings.cacheTtlMs, now)
-  if (state.level !== 'calm' || Math.floor(state.remainingMs / 1000) % 10 === 0) $.ui.invalidate('ui.render')
+  const isChanged =
+    state.level !== cacheDrawn.level ||
+    (cacheDrawn.isSvg
+      ? state.level === 'calm' && Math.ceil(state.remainingMs / MINUTE) !== cacheDrawn.minutes
+      : state.level !== 'calm' || Math.floor(state.remainingMs / 1000) % 10 === 0)
+  if (isChanged) $.ui.invalidate('ui.render')
 }
 
 function adminFetch($: EngineInterface): AdminFetch {
@@ -567,25 +580,23 @@ export const register: Register = (on, options) => {
       cache?.level === 'hot' ? ((await read($, snapshotAtom))?.contextTokens ?? (await $.session.usage()).context.tokens) : undefined
     const cacheCost =
       settings.cacheWriteUsd > 0 && cacheTokens ? `next turn ≈ ${formatUsd(cacheRewriteUsd(cacheTokens, settings.cacheWriteUsd))}` : 'next turn re-reads it all'
-    // The bar moves in whole pixels, so the drawing only changes when it visibly does.
-    const cacheWidth = cache && isLoud(cache.level) ? (isNarrow ? 52 : 72) : 28
-    const snap = (percent: number, width: number) => Math.round((percent / 100) * width) * (100 / width)
-    const cacheClock = cache ? formatClock(cache.remainingMs) : ''
+    const cacheMinutes = cache ? Math.ceil(cache.remainingMs / MINUTE) : 0
+    cacheDrawn = cache ? { level: cache.level, minutes: cacheMinutes, isSvg: Svg !== undefined } : undefined
+    // On the desktop a calm cache moves by the minute and a warm one runs itself inside one drawing, so the
+    // band does not redraw (and flash) every second; the terminal shows the live clock.
+    const cacheClock = cache ? (Svg && cache.level === 'calm' ? `${cacheMinutes}m` : formatClock(cache.remainingMs)) : ''
     const cacheTitle =
       cache?.level === 'hot'
         ? 'The prompt cache has lapsed; the next turn re-reads the whole context at full price'
-        : `The prompt cache lapses in ${cacheClock}`
+        : `The prompt cache lapses in ${formatClock(cache?.remainingMs ?? 0)}`
     const cacheLabel = cache && (
       <Text color={toneOf(cache.level)} dimColor={cache.level === 'calm'}>
         {cache.level === 'hot' ? '⚠ cache cold' : 'cache'}
       </Text>
     )
-    const cacheValue = cache && (
-      <Text bold color={toneOf(cache.level)}>
-        {cache.level === 'hot' ? cacheCost : cacheClock}
-      </Text>
-    )
     const cacheNote = cache?.level === 'warm' ? <Text color={tone('warm')}>expires soon</Text> : undefined
+    // The calm bar and the ledger segment step by the minute for the same reason.
+    const cachePercent = cache ? (Svg ? ((cacheMinutes * MINUTE) / settings.cacheTtlMs) * 100 : cache.percent) : 0
     const ctxTitle = `context ${Math.round(ctx ?? 0)}% full`
     const ctxValue = (
       <Text bold color={toneOf(ctxLevel)}>
@@ -618,6 +629,26 @@ export const register: Register = (on, options) => {
     // countdown's bar changes often, so it is a plain image (no hover title) instead.
     const svg = (source: string, alt: string, width: number | undefined, height: number, isInteractive = true) =>
       Svg ? <Svg source={source} alt={alt} width={width} height={height} isInteractive={isInteractive} /> : undefined
+    // The warm cache on the desktop: bar and digits in one self-running drawing (see cacheClockSvg).
+    const cacheWarm = (hasBar: boolean) =>
+      cache && Svg
+        ? svg(
+            cacheClockSvg({ remainingMs: cache.remainingMs, warnMs: cacheWarnMs(settings.cacheTtlMs), color: tone('warm'), title: cacheTitle, hasBar }),
+            cacheTitle,
+            hasBar ? 114 : 34,
+            16,
+            false,
+          )
+        : undefined
+    const cacheValue =
+      cache &&
+      (cache.level === 'warm' && Svg ? (
+        cacheWarm(false)
+      ) : (
+        <Text bold color={toneOf(cache.level)}>
+          {cache.level === 'hot' ? cacheCost : cacheClock}
+        </Text>
+      ))
 
     if (style === 'chips') {
       const chip = (level: Level, children: RenderChildren[]) => (
@@ -660,7 +691,7 @@ export const register: Register = (on, options) => {
           ) : cache.level === 'hot' ? (
             chip('hot', [cacheLabel, cacheValue])
           ) : (
-            chip('warm', [cacheLabel, meter(snap(cache.percent, 24), undefined, cacheTitle, tone('warm'), false), cacheValue, cacheNote])
+            chip('warm', Svg ? [cacheLabel, cacheWarm(true), cacheNote] : [cacheLabel, meter(cachePercent, undefined, cacheTitle, tone('warm')), cacheValue, cacheNote])
           ),
         )
       }
@@ -737,7 +768,7 @@ export const register: Register = (on, options) => {
         ...(cache
           ? [
               {
-                percent: cache.level === 'hot' ? 100 : snap(cache.percent, 30),
+                percent: cache.level === 'hot' || (Svg && cache.level === 'warm') ? 100 : cachePercent,
                 pace: undefined,
                 color: isLoud(cache.level) ? tone(cache.level) : quiet,
                 title: cacheTitle,
@@ -837,19 +868,16 @@ export const register: Register = (on, options) => {
               {cacheLabel}
               {cacheValue}
             </Box>
+          ) : cache.level === 'warm' && Svg ? (
+            <Box gap={1} alignItems="center">
+              {cacheLabel}
+              {cacheWarm(true)}
+              {cacheNote}
+            </Box>
           ) : (
             <Box gap={1} alignItems="center">
               {cacheLabel}
-              {meter(
-                'cache',
-                snap(cache.percent, isLoud(cache.level) ? 24 : cacheWidth),
-                undefined,
-                cache.level,
-                cacheTitle,
-                tone(cache.level),
-                cacheWidth,
-                true,
-              )}
+              {meter('cache', cachePercent, undefined, cache.level, cacheTitle, tone(cache.level), isLoud(cache.level) ? (isNarrow ? 52 : 72) : 28, true)}
               {cacheValue}
               {cacheNote}
             </Box>

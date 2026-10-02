@@ -1,4 +1,5 @@
 import type { Level } from '../types'
+import { formatClock } from './model'
 
 /** Fills that read on both the desktop's light and dark themes. */
 export const SVG_COLOR: Record<Level | 'ctx', string> = {
@@ -143,5 +144,53 @@ export function sparkSvg(values: readonly number[], color: string, title: string
     `${REDUCED}</style>` +
     `<polyline class="l" points="${points}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>` +
     '</svg>'
+  )
+}
+
+export type CacheClockSvg = {
+  /** Time left on the cache, inside its warning stretch. */
+  remainingMs: number
+  /** How long the warning stretch is; the bar drains across it. */
+  warnMs: number
+  color: string
+  title: string
+  hasBar: boolean
+}
+
+/**
+ * The cache's last stretch as one drawing that runs itself: the bar drains and the digits step down with
+ * CSS alone, so the band need not redraw every second. Each second is its own `<text>` shown for that
+ * second; with reduced motion the animation is off and it holds the value it was drawn at.
+ */
+export function cacheClockSvg({ remainingMs, warnMs, color, title, hasBar }: CacheClockSvg): string {
+  const h = 16
+  const barW = hasBar ? 72 : 0
+  const textX = hasBar ? barW + 8 : 0
+  const w = textX + 34
+  const warnS = warnMs / 1000
+  const left = Math.min(Math.max(0, remainingMs) / 1000, warnS)
+  const elapsed = r1(warnS - left)
+  const first = Math.ceil(left)
+  const texts: string[] = []
+  for (let v = first; v >= 0; v--) {
+    const delay = r1(warnS - v - elapsed)
+    texts.push(
+      `<text class="t" x="${textX}" y="12.5" style="animation-delay:${delay}s${v === first ? ';opacity:1' : ''}">${formatClock(v * 1000)}</text>`,
+    )
+  }
+  const bar = hasBar
+    ? `<rect x="0" y="4" width="${barW}" height="8" rx="4" ${TRACK}/><rect class="b" x="0" y="4" width="${barW}" height="8" rx="4" fill="${color}"/>`
+    : ''
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">` +
+    `<title>${esc(title)}</title>` +
+    '<style>' +
+    `.t{font:600 13px system-ui,-apple-system,'Segoe UI',sans-serif;font-variant-numeric:tabular-nums;fill:${color};opacity:0;animation:v 1s steps(1,end) forwards}` +
+    '@keyframes v{0%{opacity:1}100%{opacity:0}}' +
+    `.b{transform-box:fill-box;transform-origin:left center;animation:d ${r1(left)}s linear forwards}` +
+    `@keyframes d{from{transform:scaleX(${r1(left / warnS * 100) / 100})}to{transform:scaleX(0)}}` +
+    `${REDUCED}</style>` +
+    `${bar}${texts.join('')}</svg>`
   )
 }
