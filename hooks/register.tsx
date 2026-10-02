@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderChildren, SessionUsage, Timer } from 'claude-code'
+import type { EngineInterface, Register, SessionUsage, Timer } from 'claude-code'
 
 import type { AdminReading, Level, Period, Snapshot } from '../types'
 import { readAdmin } from './admin'
@@ -56,6 +56,13 @@ const COLOR: Record<Level | 'ctx' | 'quiet' | 'track' | 'tick', string> = {
   ctx: '#8a9fc0',
   track: '#3a3a40',
   tick: '#e6e3da',
+}
+
+// Pill fills: mid-tones that keep the theme's text readable on either a light or a dark band.
+const FILL: Record<Level, string> = {
+  calm: '#8a877f',
+  warm: '#b9791f',
+  hot: '#c4472f',
 }
 
 const PERIODS: readonly Period[] = ['daily', 'weekly', 'monthly']
@@ -531,7 +538,6 @@ export const register: Register = (on, options) => {
     const style = settings.style
     // SVG bars are narrower than cells, so the desktop keeps them down to 70 columns.
     const isNarrow = columns < (Svg ? 70 : 100)
-    const barWidth = columns >= 140 ? 10 : 8
     pulseTicker($, style === 'pulse' && isTerminal && e.props.isWorking)
 
     const ctx = view.contextPercent
@@ -630,10 +636,10 @@ export const register: Register = (on, options) => {
     const svg = (source: string, alt: string, width: number | undefined, height: number, isInteractive = true) =>
       Svg ? <Svg source={source} alt={alt} width={width} height={height} isInteractive={isInteractive} /> : undefined
     // The warm cache on the desktop: bar and digits in one self-running drawing (see cacheClockSvg).
-    const cacheWarm = (hasBar: boolean) =>
+    const cacheWarm = (hasBar: boolean, color = tone('warm')) =>
       cache && Svg
         ? svg(
-            cacheClockSvg({ remainingMs: cache.remainingMs, warnMs: cacheWarnMs(settings.cacheTtlMs), color: tone('warm'), title: cacheTitle, hasBar }),
+            cacheClockSvg({ remainingMs: cache.remainingMs, warnMs: cacheWarnMs(settings.cacheTtlMs), color, title: cacheTitle, hasBar }),
             cacheTitle,
             hasBar ? 114 : 34,
             16,
@@ -650,148 +656,128 @@ export const register: Register = (on, options) => {
         </Text>
       ))
 
-    if (style === 'chips') {
-      const chip = (level: Level, children: RenderChildren[]) => (
-        <Box
-          borderStyle="round"
-          borderDimColor={level === 'calm'}
-          borderColor={toneOf(level)}
-          paddingX={1}
-          gap={1}
-          alignItems="center"
-        >
-          {children}
-        </Box>
-      )
-      const meter = (percent: number, pace: number | undefined, title: string, color: string, isInteractive = true) =>
-        isNarrow
-          ? undefined
-          : Svg
-            ? svg(barSvg({ percent, pace, width: 72, color, title }), title, 72, 14, isInteractive)
-            : cellBar(percent, barWidth, pace, color)
-      // Only a loud gauge earns a chip, so a chip always means "look here".
-      const items = gauges.map(g =>
-        isLoud(g.level) ? (
-          chip(g.level, [label(g), meter(g.percent, g.pace, titleOf(g), tone(g.level)), ...value(g), ...extras(g)])
+    // Chips and ledger both draw one entry per gauge, so a bar always sits with its own label.
+    type Entry = {
+      id: string
+      label: string
+      value: string
+      limit?: string
+      note?: string
+      reset?: string
+      level: Level
+      percent: number
+      pace?: number
+      title: string
+      /** The warm cache's digits are a self-running drawing rather than text. */
+      isClock?: boolean
+    }
+    const entries: Entry[] = [
+      ...gauges.map(g => ({
+        id: g.id,
+        label: g.level === 'hot' ? `⚠ ${g.label}` : g.label,
+        value: amount(g),
+        limit: isMoney(g) ? `/ ${formatUsd(g.limitUsd!)}` : undefined,
+        note: isLoud(g.level) ? gaugeNote(g, g.id === 'five_hour' ? rate : undefined, now) : undefined,
+        reset: isLoud(g.level) && !isNarrow && g.resetsAt !== undefined ? `resets ${formatReset(g.resetsAt, now)}` : undefined,
+        level: g.level,
+        percent: g.percent,
+        pace: isLoud(g.level) ? g.pace : undefined,
+        title: titleOf(g),
+      })),
+      ...(cache
+        ? [
+            {
+              id: 'cache',
+              label: cache.level === 'hot' ? '⚠ cache cold' : 'cache',
+              value: cache.level === 'hot' ? cacheCost : cacheClock,
+              note: cache.level === 'warm' && !isNarrow ? 'expires soon' : undefined,
+              level: cache.level,
+              percent: cache.level === 'hot' || (Svg && cache.level === 'warm') ? 100 : cachePercent,
+              title: cacheTitle,
+              isClock: cache.level === 'warm' && Svg !== undefined,
+            },
+          ]
+        : []),
+      ...(ctx !== undefined
+        ? [{ id: 'ctx', label: 'ctx', value: `${Math.round(ctx)}%`, level: ctxLevel, percent: ctx, title: ctxTitle }]
+        : []),
+    ]
+    // On a fill the text keeps the theme's own colour; the fill carries the level.
+    const CLOCK_ON_FILL = '#14110f'
+    const entryParts = (e: Entry, isOnFill: boolean) => {
+      const tint = isOnFill ? undefined : toneOf(e.level)
+
+      return [
+        <Text color={tint} dimColor={!isOnFill && e.level === 'calm'}>
+          {e.label}
+        </Text>,
+        e.isClock ? (
+          cacheWarm(false, isOnFill ? CLOCK_ON_FILL : tone('warm'))
         ) : (
-          <Box gap={1}>
-            {label(g)}
-            {value(g)}
-          </Box>
+          <Text bold color={tint}>
+            {e.value}
+          </Text>
         ),
-      )
-      // Warm and lapsed caches earn a chip; with time left it is a plain dim countdown.
-      if (cache) {
-        items.push(
-          cache.level === 'calm' ? (
-            <Box gap={1}>
-              {cacheLabel}
-              {cacheValue}
-            </Box>
-          ) : cache.level === 'hot' ? (
-            chip('hot', [cacheLabel, cacheValue])
-          ) : (
-            chip('warm', Svg ? [cacheLabel, cacheWarm(true), cacheNote] : [cacheLabel, meter(cachePercent, undefined, cacheTitle, tone('warm')), cacheValue, cacheNote])
-          ),
-        )
-      }
-      const isCtxLoud = ctx !== undefined && isLoud(ctxLevel)
-      const rest: RenderChildren[] = figures.map(f => (
-        <Box gap={1}>
-          {figureLabel(f)}
-          <Text bold>{f.value}</Text>
-        </Box>
-      ))
-      if (ctx !== undefined && !isCtxLoud) {
-        rest.push(
-          <Box gap={1}>
-            <Text dimColor>ctx</Text>
-            {ctxValue}
-          </Box>,
+        e.limit ? <Text dimColor>{e.limit}</Text> : undefined,
+        e.note ? <Text color={tint}>{e.note}</Text> : undefined,
+        e.reset ? <Text dimColor={!isOnFill}>{e.reset}</Text> : undefined,
+      ]
+    }
+    const figureRow = figures.map(f => (
+      <Box gap={1}>
+        {figureLabel(f)}
+        <Text bold>{f.value}</Text>
+      </Box>
+    ))
+
+    if (style === 'chips') {
+      // A pill: the gauge's text with its percentage filled in behind it.
+      const pill = (e: Entry) => {
+        const fill = Math.min(100, Math.max(0, Math.round(e.percent)))
+
+        return (
+          <Box paddingX={1} gap={1}>
+            {fill > 0 && (
+              <Box position="absolute" left={0} top={0} bottom={0} width={`${Math.max(1, fill)}%`} backgroundColor={FILL[e.level]} />
+            )}
+            {entryParts(e, true)}
+          </Box>
         )
       }
 
       return (
-        <Box paddingX={1} columnGap={2} flexWrap="wrap" alignItems="center">
-          {items}
+        <Box paddingX={1} columnGap={1} flexWrap="wrap" alignItems="center">
+          {entries.map(pill)}
           <Box flexGrow={1} />
-          {rest.length > 0 && chip('calm', rest)}
-          {isCtxLoud && chip(ctxLevel, [<Text dimColor>ctx</Text>, meter(ctx!, undefined, ctxTitle, ctxColor), ctxValue])}
+          {figureRow}
         </Box>
       )
     }
 
     if (style === 'ledger') {
-      const line = (
-        <Box columnGap={2} flexWrap="wrap">
-          {gauges.map(g => (
-            <Box gap={1}>
-              {label(g)}
-              {value(g)}
-              {isLoud(g.level) && extras(g)}
-            </Box>
-          ))}
-          {cache && (
-            <Box gap={1}>
-              {cacheLabel}
-              {cacheValue}
-              {cacheNote}
-            </Box>
-          )}
-          <Box flexGrow={1} />
-          {figures.map(f => (
-            <Box gap={1}>
-              {figureLabel(f)}
-              <Text bold>{f.value}</Text>
-            </Box>
-          ))}
-          {ctx !== undefined && (
-            <Box gap={1}>
-              <Text dimColor>ctx</Text>
-              {ctxValue}
-            </Box>
-          )}
-        </Box>
-      )
-      if (gauges.length === 0) return <Box paddingX={1}>{line}</Box>
-
-      // The rule stays grey until a segment turns loud.
+      // Each gauge is a column: its text, with its own bar directly beneath at the same width.
       const quiet = isTerminal ? COLOR.quiet : SVG_QUIET
-      const segments = [
-        ...gauges.map(g => ({
-          percent: g.percent,
-          pace: isLoud(g.level) ? g.pace : undefined,
-          color: isLoud(g.level) ? tone(g.level) : quiet,
-          title: titleOf(g),
-        })),
-        // The cache drains; once lapsed its whole segment turns red.
-        ...(cache
-          ? [
-              {
-                percent: cache.level === 'hot' || (Svg && cache.level === 'warm') ? 100 : cachePercent,
-                pace: undefined,
-                color: isLoud(cache.level) ? tone(cache.level) : quiet,
-                title: cacheTitle,
-              },
-            ]
-          : []),
-        ...(ctx !== undefined ? [{ percent: ctx, pace: undefined, color: isLoud(ctxLevel) ? ctxColor : quiet, title: ctxTitle }] : []),
-      ]
-      let rule
-      if (Svg) {
-        const width = Math.round((columns - 2) * 8)
-        // No width of its own: the rule takes the markup's, up to the band's.
-        rule = svg(ruleSvg(segments, width), segments.map(s => s.title).join('; '), undefined, 7)
-      } else {
-        const gap = 2
-        const each = Math.max(4, Math.floor((columns - 2 - gap * (segments.length - 1)) / segments.length))
-        rule = <Box gap={gap}>{segments.map(s => cellBar(s.percent, each, s.pace, s.color, '▔'))}</Box>
+      const column = (e: Entry) => {
+        const parts = [e.label, e.isClock ? '00:00' : e.value, e.limit, e.note, e.reset].filter((p): p is string => !!p)
+        const width = Math.max(10, parts.reduce((n, p) => n + p.length, 0) + parts.length)
+        const color = isLoud(e.level) ? tone(e.level) : quiet
+        const bar = Svg
+          ? svg(ruleSvg([{ percent: e.percent, pace: e.pace, color, title: e.title }], width * 8), e.title, width * 8, 7)
+          : cellBar(e.percent, width, e.pace, color, '▔')
+
+        return (
+          <Box flexDirection="column" width={width}>
+            <Box gap={1}>{entryParts(e, false)}</Box>
+            {bar}
+          </Box>
+        )
       }
 
       return (
-        <Box paddingX={1} flexDirection="column">
-          {line}
-          {rule}
+        <Box paddingX={1} columnGap={2} flexWrap="wrap" alignItems="flex-start">
+          {entries.map(column)}
+          <Box flexGrow={1} />
+          {figureRow}
         </Box>
       )
     }

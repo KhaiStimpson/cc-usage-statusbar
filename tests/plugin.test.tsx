@@ -529,19 +529,50 @@ describe('styles', () => {
     await idle.unmount()
   })
 
-  test('calm chips share one box of figures', { options: { style: 'chips' } }, async ($, on) => {
+  /** The fills drawn behind a pill's text, by colour. */
+  const fills = async (ui: Awaited<ReturnType<typeof $.ui.mount>>) =>
+    (await ui.findAll({ type: 'Box' })).filter(b => b.props.position === 'absolute').map(b => b.props)
+
+  test('chips fill each gauge to its percentage, in grey while calm', { options: { style: 'chips' } }, async ($, on) => {
     world(on, SUBSCRIPTION)
     const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
-    const boxes = await ui.findAll({ type: 'Box' })
-    expect(boxes.filter(b => b.props.borderStyle === 'round')).toHaveLength(1)
+    const drawn = await fills(ui)
+    // 5h, 7d and ctx.
+    expect(drawn.map(f => f.width)).toEqual(['62%', '31%', '48%'])
+    expect(new Set(drawn.map(f => f.backgroundColor))).toEqual(new Set(['#8a877f']))
     await ui.unmount()
   })
 
-  test('a loud gauge gets a chip of its own', { options: { style: 'chips' } }, async ($, on) => {
+  test('a loud gauge fills amber', { options: { style: 'chips' } }, async ($, on) => {
     world(on, BUSY)
     const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
-    const boxes = await ui.findAll({ type: 'Box' })
-    expect(boxes.filter(b => b.props.borderStyle === 'round')).toHaveLength(2)
+    const drawn = await fills(ui)
+    expect(drawn[0]).toMatchObject({ width: '83%', backgroundColor: '#b9791f' })
+    expect(drawn[1]).toMatchObject({ width: '31%', backgroundColor: '#8a877f' })
+    await ui.unmount()
+  })
+
+  test('a lapsed cache is a solid red pill', { options: { style: 'chips' } }, async ($, on) => {
+    const { clock } = world(on, SUBSCRIPTION)
+    on('turn.complete', () => ({ text: '' }))
+    await $.turn.complete(TURN)
+    await clock.advance(MINUTES(6))
+    const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
+    expect((await fills(ui)).find(f => f.backgroundColor === '#c4472f')).toMatchObject({ width: '100%' })
+    await ui.unmount()
+  })
+
+  test('ledger puts each bar under its own gauge, at the gauge column width', { options: { style: 'ledger' } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
+    const columns = (await ui.findAll({ type: 'Box' })).filter(b => b.props.flexDirection === 'column' && b.props.width !== undefined)
+    // 5h, 7d and ctx, each at least 10 cells wide.
+    expect(columns).toHaveLength(3)
+    for (const c of columns) expect(c.props.width).toBeGreaterThanOrEqual(10)
+    const bars = await ui.findAll({ type: 'Svg' })
+    expect(bars).toHaveLength(3)
+    // No note sits under a bar.
+    expect(await ui.find({ type: 'Text', text: 'expires soon' })).toBeUndefined()
     await ui.unmount()
   })
 })
