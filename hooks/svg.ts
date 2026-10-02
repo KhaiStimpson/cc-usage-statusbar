@@ -290,7 +290,7 @@ export function pillSvg({ parts, percent, level, title, clock }: PillSvg): { sou
 
 /** A 1 px rule across `width` px, the pane's divider between sections. */
 export function hairlineSvg(width: number): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="1" viewBox="0 0 ${width} 1"><rect width="${width}" height="1" ${TRACK}/></svg>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="1" viewBox="0 0 ${width} 1"><rect width="${width}" height="1" fill="#808080" fill-opacity="0.45"/></svg>`
 }
 
 /** A 3 px bar with no motion, for the rows under a list. */

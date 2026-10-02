@@ -476,6 +476,18 @@ describe('cache countdown', () => {
     await ui.unmount()
   })
 
+  test('the desktop pane draws at any width, from a narrow dock to a full-width pane', async ($, on) => {
+    world(on, BUSY)
+    engine(on)
+    await reply($, BUSY)
+
+    for (const columns of [30, 60, 155]) {
+      const ui = await $.ui.mount(pane('desktop', columns))
+      expect(await ui.find({ type: 'Text', text: '5-hour window' })).toBeDefined()
+      await ui.unmount()
+    }
+  })
+
   test('the desktop pane says why a lapsed cache is cold and what the next turn costs', async ($, on) => {
     const { clock } = world(on, SUBSCRIPTION)
     engine(on)

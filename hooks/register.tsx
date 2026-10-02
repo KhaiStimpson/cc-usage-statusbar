@@ -1071,7 +1071,9 @@ export const register: Register = (on, options) => {
 
     if (Svg) {
       // A quiet list: sections divided by hairlines, one big figure each, thin bars, the 5-hour history as a chart.
-      const pw = Math.max(240, Math.min(440, Math.round(width * 7.5)))
+      // The drawings are sized in px from the columns the pane has (8 px each, as the band does), capped so a wide pane stays a readable column.
+      const cols = Math.max(24, Math.min(80, e.props.bodyColumns - 3))
+      const pw = cols * 8
       const tone = (level: Level) => SVG_COLOR[level]
       const svg = (source: string, alt: string, wide: number, tall: number) => (
         <Svg source={source} alt={alt} width={wide} height={tall} isInteractive={false} />
@@ -1095,7 +1097,7 @@ export const register: Register = (on, options) => {
       }
       const percentFigure = (percent: number, color?: string) => figure(percentLabel(percent).replace('%', ''), '%', color)
       const fact = (name: string, value: string, color?: string) => (
-        <Box flexDirection="column" flexGrow={1}>
+        <Box flexDirection="column" width={Math.floor(cols / 3)}>
           <Text dimColor>{name}</Text>
           <Text bold color={color}>
             {value}
@@ -1131,15 +1133,15 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column" gap={1}>
             <Box justifyContent="space-between">
               <Text dimColor>{name}</Text>
+              <Text dimColor>{reset}</Text>
+            </Box>
+            <Box justifyContent="space-between" alignItems="center">
+              {percentFigure(g.percent, color)}
               {pace && (
-                <Text color={color} dimColor={g.level === 'calm'}>
+                <Text bold color={color} dimColor={g.level === 'calm'}>
                   {pace}
                 </Text>
               )}
-            </Box>
-            <Box justifyContent="space-between" alignItems="flex-end">
-              {percentFigure(g.percent, color)}
-              <Text dimColor>{reset}</Text>
             </Box>
             {bar(
               g.id,
@@ -1172,20 +1174,20 @@ export const register: Register = (on, options) => {
         )
       }
 
-      const half = Math.floor((pw - 24) / 2)
+      const half = Math.floor(cols / 2) * 8 - 24
       const ctxPercent = snapshot?.contextPercent
       const ctxLevel: Level = ctxPercent === undefined ? 'calm' : ctxPercent >= 90 ? 'hot' : ctxPercent >= 75 ? 'warm' : 'calm'
       if (view.sessionUsd !== undefined || ctxPercent !== undefined) {
         section(
-          <Box gap={3}>
+          <Box>
             {view.sessionUsd !== undefined && (
-              <Box flexDirection="column" gap={1} flexGrow={1}>
+              <Box flexDirection="column" gap={1} width={Math.floor(cols / 2)}>
                 <Text dimColor>Session cost</Text>
                 {figure(formatUsd(view.sessionUsd))}
               </Box>
             )}
             {ctxPercent !== undefined && (
-              <Box flexDirection="column" gap={1} flexGrow={1}>
+              <Box flexDirection="column" gap={1} width={Math.floor(cols / 2)}>
                 <Text dimColor>Context</Text>
                 {figure(String(Math.round(ctxPercent)), '%', ctxLevel === 'calm' ? undefined : tone(ctxLevel))}
                 {svg(
@@ -1335,9 +1337,9 @@ export const register: Register = (on, options) => {
             {bar('spend', gauge.percent, gauge.pace, gauge.level, `${gauge.label}: ${percentLabel(gauge.percent)} used`)}
             {daily.length > 1 && svg(dailySvg(daily, SVG_COLOR.ctx, pw, 40, 'Spend by day, latest in colour'), 'Spend by day', pw, 40)}
             {facts.length > 0 && (
-              <Box flexWrap="wrap" columnGap={4}>
+              <Box flexWrap="wrap">
                 {facts.map(([name, value]) => (
-                  <Box flexDirection="column">
+                  <Box flexDirection="column" width={Math.floor(cols / 2)}>
                     <Text dimColor>{name}</Text>
                     <Text bold>{value}</Text>
                   </Box>
@@ -1348,7 +1350,7 @@ export const register: Register = (on, options) => {
         )
       } else if (view.monthUsd !== undefined || (spend && view.isApiMode)) {
         section(
-          <Box gap={4}>
+          <Box>
             {view.monthUsd !== undefined && fact('Month', `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`)}
             {spend && view.isApiMode && fact('Today', formatUsd(spend.todayUsd))}
           </Box>,
@@ -1359,11 +1361,13 @@ export const register: Register = (on, options) => {
       if (items.length === 0) section(<Text dimColor>No usage reported yet. It appears after the first reply.</Text>)
 
       return (
-        <Box flexDirection="column" gap={1} paddingX={1}>
-          {items}
-          <Box gap={1}>
-            {adminKey && <Button key="refresh" label="Refresh" hotkey="r" onPress={() => void pollAdmin($)} />}
-            <Button key="close" label="Close" role="dismiss" onPress={() => void $.ui.close({ id: PANE })} />
+        <Box flexDirection="column" paddingX={1}>
+          <Box flexDirection="column" gap={1} width={cols}>
+            {items}
+            <Box gap={1}>
+              {adminKey && <Button key="refresh" label="Refresh" hotkey="r" onPress={() => void pollAdmin($)} />}
+              <Button key="close" label="Close" role="dismiss" onPress={() => void $.ui.close({ id: PANE })} />
+            </Box>
           </Box>
         </Box>
       )
