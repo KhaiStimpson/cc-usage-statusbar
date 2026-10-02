@@ -348,6 +348,11 @@ export function sparkline(values: readonly number[], max?: number): string {
     .join('')
 }
 
+/** One cell that stands in for a calm bar: higher as the gauge fills. */
+export function levelGlyph(percent: number): string {
+  return SPARKS[Math.min(7, Math.floor((clamp(percent) / 100) * 7.99))]!
+}
+
 /** The plain-text line for the status entry: no color, so warnings are words. */
 export function statusText(view: View, rate: number | undefined, now: number): string | undefined {
   const parts: string[] = []
@@ -442,7 +447,7 @@ export function visibleView(view: View, shown: Shown): View {
 }
 
 /** How the band draws, chosen with `/usagebar style`. */
-export const STYLES = ['classic', 'chips', 'ledger', 'pulse'] as const
+export const STYLES = ['chips', 'ledger', 'pulse'] as const
 export type Style = (typeof STYLES)[number]
 
 export function parseStyle(word: string): Style | undefined {

@@ -12,6 +12,7 @@ import {
   formatUsd,
   gaugeNote,
   HOUR,
+  levelGlyph,
   MINUTE,
   parseStyle,
   percentLabel,
@@ -300,6 +301,18 @@ describe('styles', () => {
     expect(parseStyle('Pulse')).toBe('pulse')
     expect(parseStyle('ledger')).toBe('ledger')
     expect(parseStyle('fancy')).toBeUndefined()
+    expect(parseStyle('classic')).toBeUndefined()
+  })
+
+  test('a calm gauge is one glyph that rises as it fills', () => {
+    expect(levelGlyph(0)).toBe('▁')
+    expect(levelGlyph(48)).toBe('▄')
+    expect(levelGlyph(100)).toBe('█')
+  })
+
+  test('a calm pulse bar can be drawn thin', () => {
+    const svg = barSvg({ percent: 40, width: 28, color: '#4f9e6a', title: 't', height: 4, motion: { from: 0, isHot: false } })
+    expect(svg).toContain('y="5" width="28" height="4" rx="2"')
   })
 
   test('small percentages never read as 0%', () => {

@@ -14,6 +14,15 @@ const SUBSCRIPTION: SessionUsage = {
   cost: { usd: 1.82 },
 }
 
+/** The 5-hour window past its warning line: loud. */
+const BUSY: SessionUsage = {
+  ...SUBSCRIPTION,
+  rateLimits: [
+    { kind: 'five_hour', percentUsed: 83, resetsAt: new Date(NOW + MINUTES(108)).toISOString() },
+    { kind: 'seven_day', percentUsed: 31, resetsAt: new Date(NOW + HOURS(30)).toISOString() },
+  ],
+}
+
 const GATEWAY: SessionUsage = {
   startedAt: NOW - HOURS(1),
   context: { tokens: 96_000, window: 200_000, percent: 48 },
@@ -71,18 +80,29 @@ const band = (bodyColumns: number) => ({
 })
 
 describe('band', () => {
-  test('subscription windows draw with their percentages on every surface', async ($, on) => {
+  test('calm windows draw as a label and a percentage on every surface', async ($, on) => {
     world(on, SUBSCRIPTION)
     for (const surface of ['terminal', 'desktop'] as const) {
       const ui = await $.ui.mount({ surface, ...band(160) })
       expect(await ui.find({ type: 'Text', text: '5h' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: '62%' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: '31%' })).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: '↻1h48m' })).toBeDefined()
       expect(await ui.find({ type: 'Text', text: '$1.82' })).toBeDefined()
-      expect(await ui.find({ type: 'Text', text: '┃' })).toBeDefined()
+      expect(await ui.find({ type: 'Text', text: /resets/ })).toBeUndefined()
       await ui.unmount()
     }
+  })
+
+  test('a loud window grows its bar, note and reset time', async ($, on) => {
+    world(on, BUSY)
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    expect(await ui.find({ type: 'Text', text: '83%' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'ahead of pace' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'resets 1h48m' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /█/ })).toBeDefined()
+    // The calm 7d window stays small.
+    expect(await ui.find({ type: 'Text', text: 'resets Thu' })).toBeUndefined()
+    await ui.unmount()
   })
 
   test('a gateway spend limit reads in dollars once its amount is set', { options: { org_limit_usd: 500 } }, async ($, on) => {
@@ -95,11 +115,11 @@ describe('band', () => {
     await ui.unmount()
   })
 
-  test('a narrow terminal drops the bars', async ($, on) => {
-    world(on, SUBSCRIPTION)
+  test('a narrow terminal drops reset times', async ($, on) => {
+    world(on, BUSY)
     const ui = await $.ui.mount({ surface: 'terminal', ...band(80) })
-    expect(await ui.find({ type: 'Text', text: '62%' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /━/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Text', text: '83%' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /resets/ })).toBeUndefined()
     await ui.unmount()
   })
 
@@ -356,7 +376,7 @@ describe('styles', () => {
           key: 'usage-statusbar@cc-usage-statusbar.style',
           label: 'Style',
           kind: 'choice',
-          value: 'classic',
+          value: 'pulse',
           provider: { kind: 'engine' },
           isLocked: false,
         },
@@ -377,7 +397,8 @@ describe('styles', () => {
     const written = styleRow(on)
 
     const bad = await $.command.run({ ...refresh, args: 'style fancy' })
-    expect(bad.text).toBe("Usage: /usagebar style <classic | chips | ledger | pulse>. It's classic now.")
+    expect(bad.text).toBe("Usage: /usagebar style <chips | ledger | pulse>. It's pulse now.")
+    expect((await $.command.run({ ...refresh, args: 'style classic' })).text).toContain('Usage:')
     expect(written).toEqual({})
 
     const ran = await $.command.run({ ...refresh, args: 'style Ledger' })
@@ -389,7 +410,7 @@ describe('styles', () => {
   })
 
   for (const style of ['chips', 'ledger', 'pulse'] as const) {
-    test(`${style} draws every figure on both surfaces, as SVG on the desktop`, { options: { style, budget_usd: 500 } }, async ($, on) => {
+    test(`${style} draws every figure on both surfaces, with SVG bars on the desktop`, { options: { style, budget_usd: 500 } }, async ($, on) => {
       world(on, SUBSCRIPTION)
       await $.session.measure({ ...SUBSCRIPTION, changed: ['cost'] })
       for (const surface of ['terminal', 'desktop'] as const) {
@@ -398,7 +419,9 @@ describe('styles', () => {
         expect(await ui.find({ type: 'Text', text: '62%' })).toBeDefined()
         expect(await ui.find({ type: 'Text', text: 'budget' })).toBeDefined()
         expect(await ui.find({ type: 'Text', text: '$1.82' })).toBeDefined()
-        expect(await ui.find({ type: 'Svg' }))[surface === 'desktop' ? 'toBeDefined' : 'toBeUndefined']()
+        // Calm chips are plain text, so they draw no bar at all.
+        const hasSvg = surface === 'desktop' && style !== 'chips'
+        expect(await ui.find({ type: 'Svg' }))[hasSvg ? 'toBeDefined' : 'toBeUndefined']()
         await ui.unmount()
       }
     })
@@ -416,11 +439,19 @@ describe('styles', () => {
     await idle.unmount()
   })
 
-  test('chips draw each figure in a rounded box', { options: { style: 'chips' } }, async ($, on) => {
+  test('calm chips share one box of figures', { options: { style: 'chips' } }, async ($, on) => {
     world(on, SUBSCRIPTION)
     const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
     const boxes = await ui.findAll({ type: 'Box' })
-    expect(boxes.filter(b => b.props.borderStyle === 'round').length).toBeGreaterThan(3)
+    expect(boxes.filter(b => b.props.borderStyle === 'round')).toHaveLength(1)
+    await ui.unmount()
+  })
+
+  test('a loud gauge gets a chip of its own', { options: { style: 'chips' } }, async ($, on) => {
+    world(on, BUSY)
+    const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
+    const boxes = await ui.findAll({ type: 'Box' })
+    expect(boxes.filter(b => b.props.borderStyle === 'round')).toHaveLength(2)
     await ui.unmount()
   })
 })

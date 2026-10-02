@@ -7,6 +7,8 @@ export const SVG_COLOR: Record<Level | 'ctx', string> = {
   hot: '#d9563f',
   ctx: '#6f8fbf',
 }
+/** The grey of a calm ledger segment: present, but asking for nothing. */
+export const SVG_QUIET = '#8a877f'
 const TRACK = 'fill="#808080" fill-opacity="0.28"'
 const TICK = '#8a877f'
 
@@ -32,14 +34,16 @@ export type BarSvg = {
   width: number
   color: string
   title: string
+  /** The bar's thickness; 6 px, or 8 px with motion, when absent. */
+  height?: number
   /** Pulse: grow in from this percent, sweep a sheen, breathe the pace tick, glow when hot. */
   motion?: { from: number; isHot: boolean }
 }
 
 /** A rounded bar with its pace tick, `width` px wide and 14 px tall. */
-export function barSvg({ percent, pace, width, color, title, motion }: BarSvg): string {
+export function barSvg({ percent, pace, width, color, title, height, motion }: BarSvg): string {
   const h = 14
-  const bh = motion ? 8 : 6
+  const bh = height ?? (motion ? 8 : 6)
   const y = (h - bh) / 2
   const fw = fillWidth(percent, width)
   const tx = pace === undefined ? undefined : r1(Math.min(width - 2, (clamp(pace) / 100) * width))

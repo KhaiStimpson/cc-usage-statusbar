@@ -17,6 +17,7 @@ import {
   formatUsd,
   gaugeNote,
   hitsFullIn,
+  levelGlyph,
   MINUTE,
   parsePart,
   parseStyle,
@@ -29,7 +30,7 @@ import {
   visibleView,
 } from './model'
 import type { Gauge, Options, Part, Shown, Style, View } from './model'
-import { barSvg, liveDotSvg, ruleSvg, sparkSvg, SVG_COLOR } from './svg'
+import { barSvg, liveDotSvg, ruleSvg, sparkSvg, SVG_COLOR, SVG_QUIET } from './svg'
 
 const PANE = 'usage-statusbar'
 const COMMAND = 'usagebar'
@@ -41,10 +42,11 @@ const historyAtom = atom({ plugin: 'usage-statusbar', key: 'history' } as const,
 const turnsAtom = atom({ plugin: 'usage-statusbar', key: 'turns' } as const, [])
 const alertsAtom = atom({ plugin: 'usage-statusbar', key: 'alerts' } as const, [])
 
-const COLOR: Record<Level | 'ctx' | 'track' | 'tick', string> = {
+const COLOR: Record<Level | 'ctx' | 'quiet' | 'track' | 'tick', string> = {
   calm: '#7fb685',
   warm: '#e0a458',
   hot: '#e06c5a',
+  quiet: '#6b6a66',
   ctx: '#8a9fc0',
   track: '#3a3a40',
   tick: '#e6e3da',
@@ -67,7 +69,7 @@ function readSettings(options: Readonly<Record<string, unknown>>): Settings {
 
   return {
     display: String(options.display ?? 'band'),
-    style: parseStyle(String(options.style ?? 'classic')) ?? 'classic',
+    style: parseStyle(String(options.style ?? 'pulse')) ?? 'pulse',
     budgetUsd: Number(options.budget_usd ?? 0) || 0,
     budgetPeriod: PERIODS.includes(period) ? period : 'monthly',
     orgLimitUsd: Number(options.org_limit_usd ?? 0) || 0,
@@ -470,106 +472,57 @@ export const register: Register = (on, options) => {
     const columns = e.props.bodyColumns
     bandColumns = columns
     const style = settings.style
-    // SVG bars are narrower than cells, so the new styles keep them down to 70 columns.
-    const isNarrow = columns < (Svg && style !== 'classic' ? 70 : 100)
+    // SVG bars are narrower than cells, so the desktop keeps them down to 70 columns.
+    const isNarrow = columns < (Svg ? 70 : 100)
     const barWidth = columns >= 140 ? 10 : 8
     pulseTicker($, style === 'pulse' && isTerminal && e.props.isWorking)
 
     const ctx = view.contextPercent
     const ctxLevel: Level = ctx === undefined ? 'calm' : ctx >= 90 ? 'hot' : ctx >= 75 ? 'warm' : 'calm'
 
-    if (style === 'classic') {
-      const bar = (percent: number, width: number, pace: number | undefined, color: string) => {
-        const runs: { cell: string; n: number }[] = []
-        for (const cell of barCells(percent, width, pace)) {
-          const last = runs[runs.length - 1]
-          if (last && last.cell === cell) last.n += 1
-          else runs.push({ cell, n: 1 })
-        }
-
-        return (
-          <Box>
-            {runs.map(run =>
-              run.cell === 'tick' ? (
-                <Text color={COLOR.tick}>┃</Text>
-              ) : (
-                <Text color={run.cell === 'fill' ? color : COLOR.track}>{'━'.repeat(run.n)}</Text>
-              ),
-            )}
-          </Box>
-        )
-      }
-
-      const gauge = (g: Gauge, width: number) => {
-        const color = COLOR[g.level]
-        const isMoney = g.spentUsd !== undefined && g.limitUsd !== undefined
-        const value = isMoney ? `${g.isEstimate ? '≈' : ''}${formatUsd(g.spentUsd!)}` : `${g.percent}%`
-        const note = isNarrow ? undefined : gaugeNote(g, g.id === 'five_hour' ? rate : undefined, now)
-
-        return (
-          <Box gap={1}>
-            <Text dimColor={g.level !== 'hot'} color={g.level === 'hot' ? COLOR.hot : undefined}>
-              {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
-            </Text>
-            {!isNarrow && bar(g.percent, width, g.pace, color)}
-            <Text bold color={g.level === 'calm' ? undefined : color}>
-              {value}
-            </Text>
-            {isMoney && <Text dimColor>/ {formatUsd(g.limitUsd!)}</Text>}
-            {!isNarrow && g.resetsAt !== undefined && <Text dimColor>↻{formatReset(g.resetsAt, now)}</Text>}
-            {note && <Text color={color}>{note}</Text>}
-          </Box>
-        )
-      }
-
-      const figure = (label: string, value: string) => (
-        <Box gap={1}>
-          <Text dimColor>{label}</Text>
-          <Text>{value}</Text>
-        </Box>
-      )
-
-      return (
-        <Box paddingX={1} columnGap={isNarrow ? 1 : 2} flexWrap="wrap">
-          {view.windows.map(g => gauge(g, barWidth))}
-          {view.spend && gauge(view.spend, isNarrow ? barWidth : barWidth + 4)}
-          {view.monthUsd !== undefined &&
-            figure('month', `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`)}
-          {view.todayUsd !== undefined && figure('today', formatUsd(view.todayUsd))}
-          {view.sessionUsd !== undefined &&
-            (view.isApiMode ? figure('session', formatUsd(view.sessionUsd)) : <Text>{formatUsd(view.sessionUsd)}</Text>)}
-          {ctx !== undefined && (
-            <Box gap={1}>
-              <Text dimColor>ctx</Text>
-              {!isNarrow && bar(ctx, 6, undefined, ctxLevel === 'calm' ? COLOR.ctx : COLOR[ctxLevel])}
-              <Text bold color={ctxLevel === 'calm' ? undefined : COLOR[ctxLevel]}>
-                {Math.round(ctx)}%
-              </Text>
-            </Box>
-          )}
-          {columns >= 150 && (
-            <Box flexGrow={1} justifyContent="flex-end">
-              <Text dimColor>/{COMMAND} for details</Text>
-            </Box>
-          )}
-        </Box>
-      )
-    }
-
-    // chips, ledger and pulse share their pieces; the desktop draws bars as SVG.
+    // Quiet until it matters: a calm gauge is a label and a number; a loud one gets its bar, note and reset.
+    const isLoud = (level: Level) => level !== 'calm'
     const tone = (level: Level) => (isTerminal ? COLOR[level] : SVG_COLOR[level])
     const toneOf = (level: Level) => (level === 'calm' ? undefined : tone(level))
     const ctxColor = ctxLevel === 'calm' ? (isTerminal ? COLOR.ctx : SVG_COLOR.ctx) : tone(ctxLevel)
     const gauges = [...view.windows, ...(view.spend ? [view.spend] : [])]
     const isMoney = (g: Gauge) => g.spentUsd !== undefined && g.limitUsd !== undefined
     const amount = (g: Gauge) => (isMoney(g) ? `${g.isEstimate ? '≈' : ''}${formatUsd(g.spentUsd!)}` : percentLabel(g.percent))
-    const noteOf = (g: Gauge) => (isNarrow ? undefined : gaugeNote(g, g.id === 'five_hour' ? rate : undefined, now))
     const titleOf = (g: Gauge) =>
       `${g.label}: ${percentLabel(g.percent)} used${g.pace !== undefined ? `, ${percentLabel(g.pace)} of the window gone` : ''}`
     const figures: { label: string; value: string; isSession?: boolean }[] = []
     if (view.monthUsd !== undefined) figures.push({ label: 'month', value: `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}` })
     if (view.todayUsd !== undefined) figures.push({ label: 'today', value: formatUsd(view.todayUsd) })
     if (view.sessionUsd !== undefined) figures.push({ label: 'session', value: formatUsd(view.sessionUsd), isSession: true })
+
+    const label = (g: Gauge) => (
+      <Text color={toneOf(g.level)} dimColor={g.level === 'calm'}>
+        {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
+      </Text>
+    )
+    // Dollars need their limit to mean anything, so a money gauge keeps it even when calm.
+    const value = (g: Gauge) => [
+      <Text bold color={toneOf(g.level)}>
+        {amount(g)}
+      </Text>,
+      isMoney(g) ? <Text dimColor>/ {formatUsd(g.limitUsd!)}</Text> : undefined,
+    ]
+    // What a loud gauge adds after its value.
+    const extras = (g: Gauge) => {
+      const note = gaugeNote(g, g.id === 'five_hour' ? rate : undefined, now)
+
+      return [
+        note ? <Text color={tone(g.level)}>{note}</Text> : undefined,
+        !isNarrow && g.resetsAt !== undefined ? <Text dimColor>resets {formatReset(g.resetsAt, now)}</Text> : undefined,
+      ]
+    }
+    const figureLabel = (f: (typeof figures)[number]) => (isNarrow && f.isSession ? undefined : <Text dimColor>{f.label}</Text>)
+    const ctxTitle = `context ${Math.round(ctx ?? 0)}% full`
+    const ctxValue = (
+      <Text bold color={toneOf(ctxLevel)}>
+        {Math.round(ctx ?? 0)}%
+      </Text>
+    )
 
     // A bar of cells for the terminal: fill, pace tick, track.
     const cellBar = (percent: number, width: number, pace: number | undefined, color: string, glyph = '━') => {
@@ -608,51 +561,45 @@ export const register: Register = (on, options) => {
           {children}
         </Box>
       )
-      const meter = (percent: number, pace: number | undefined, level: Level, title: string, color: string) =>
+      const meter = (percent: number, pace: number | undefined, title: string, color: string) =>
         isNarrow
           ? undefined
           : Svg
-            ? svg(barSvg({ percent, pace, width: 84, color, title }), title, 84, 14)
+            ? svg(barSvg({ percent, pace, width: 72, color, title }), title, 72, 14)
             : cellBar(percent, barWidth, pace, color)
-      const chips: RenderChildren[] = []
-      for (const g of gauges) {
-        const note = noteOf(g)
-        chips.push(
-          chip(g.level, [
-            <Text color={toneOf(g.level)} dimColor={g.level === 'calm'}>
-              {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
-            </Text>,
-            meter(g.percent, g.pace, g.level, titleOf(g), tone(g.level)),
-            <Text bold color={toneOf(g.level)}>
-              {amount(g)}
-            </Text>,
-            isMoney(g) ? <Text dimColor>of {formatUsd(g.limitUsd!)}</Text> : undefined,
-          ]),
-        )
-        if (!isNarrow && g.resetsAt !== undefined) chips.push(chip('calm', [<Text dimColor>↻ {formatReset(g.resetsAt, now)}</Text>]))
-        if (note) chips.push(chip(g.level === 'calm' ? 'warm' : g.level, [<Text color={tone(g.level === 'calm' ? 'warm' : g.level)}>{note}</Text>]))
-      }
-      for (const f of figures) chips.push(chip('calm', [<Text dimColor>{f.label}</Text>, <Text bold>{f.value}</Text>]))
-      if (ctx !== undefined) {
-        chips.push(
-          chip(ctxLevel, [
-            <Text dimColor>ctx</Text>,
-            meter(ctx, undefined, ctxLevel, `context ${Math.round(ctx)}% full`, ctxColor),
-            <Text bold color={toneOf(ctxLevel)}>
-              {Math.round(ctx)}%
-            </Text>,
-          ]),
+      // Only a loud gauge earns a chip, so a chip always means "look here".
+      const items = gauges.map(g =>
+        isLoud(g.level) ? (
+          chip(g.level, [label(g), meter(g.percent, g.pace, titleOf(g), tone(g.level)), ...value(g), ...extras(g)])
+        ) : (
+          <Box gap={1}>
+            {label(g)}
+            {value(g)}
+          </Box>
+        ),
+      )
+      const isCtxLoud = ctx !== undefined && isLoud(ctxLevel)
+      const rest: RenderChildren[] = figures.map(f => (
+        <Box gap={1}>
+          {figureLabel(f)}
+          <Text bold>{f.value}</Text>
+        </Box>
+      ))
+      if (ctx !== undefined && !isCtxLoud) {
+        rest.push(
+          <Box gap={1}>
+            <Text dimColor>ctx</Text>
+            {ctxValue}
+          </Box>,
         )
       }
 
       return (
-        <Box paddingX={1} columnGap={1} flexWrap="wrap" alignItems="center">
-          {chips}
-          {columns >= 150 && (
-            <Box flexGrow={1} justifyContent="flex-end">
-              <Text dimColor>/{COMMAND} for details</Text>
-            </Box>
-          )}
+        <Box paddingX={1} columnGap={2} flexWrap="wrap" alignItems="center">
+          {items}
+          <Box flexGrow={1} />
+          {rest.length > 0 && chip('calm', rest)}
+          {isCtxLoud && chip(ctxLevel, [<Text dimColor>ctx</Text>, meter(ctx!, undefined, ctxTitle, ctxColor), ctxValue])}
         </Box>
       )
     }
@@ -660,63 +607,50 @@ export const register: Register = (on, options) => {
     if (style === 'ledger') {
       const line = (
         <Box columnGap={2} flexWrap="wrap">
-          {gauges.map(g => {
-            const note = noteOf(g)
-
-            return (
-              <Box gap={1}>
-                <Text color={toneOf(g.level)} dimColor={g.level === 'calm'}>
-                  {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
-                </Text>
-                <Text bold color={toneOf(g.level)}>
-                  {amount(g)}
-                </Text>
-                {isMoney(g) && (
-                  <Text dimColor>
-                    of {formatUsd(g.limitUsd!)} · {percentLabel(g.percent)}
-                  </Text>
-                )}
-                {!isNarrow && g.resetsAt !== undefined && <Text dimColor>resets {formatReset(g.resetsAt, now)}</Text>}
-                {note && <Text color={tone(g.level === 'calm' ? 'warm' : g.level)}>{note}</Text>}
-              </Box>
-            )
-          })}
+          {gauges.map(g => (
+            <Box gap={1}>
+              {label(g)}
+              {value(g)}
+              {isLoud(g.level) && extras(g)}
+            </Box>
+          ))}
           <Box flexGrow={1} />
           {figures.map(f => (
             <Box gap={1}>
-              <Text dimColor>{f.label}</Text>
+              {figureLabel(f)}
               <Text bold>{f.value}</Text>
             </Box>
           ))}
           {ctx !== undefined && (
             <Box gap={1}>
               <Text dimColor>ctx</Text>
-              <Text bold color={toneOf(ctxLevel)}>
-                {Math.round(ctx)}%
-              </Text>
+              {ctxValue}
             </Box>
           )}
         </Box>
       )
-      if (isNarrow || gauges.length === 0) return <Box paddingX={1}>{line}</Box>
+      if (gauges.length === 0) return <Box paddingX={1}>{line}</Box>
 
+      // The rule stays grey until a segment turns loud.
+      const quiet = isTerminal ? COLOR.quiet : SVG_QUIET
+      const segments = [
+        ...gauges.map(g => ({
+          percent: g.percent,
+          pace: isLoud(g.level) ? g.pace : undefined,
+          color: isLoud(g.level) ? tone(g.level) : quiet,
+          title: titleOf(g),
+        })),
+        ...(ctx !== undefined ? [{ percent: ctx, pace: undefined, color: isLoud(ctxLevel) ? ctxColor : quiet, title: ctxTitle }] : []),
+      ]
       let rule
       if (Svg) {
         const width = Math.round((columns - 2) * 8)
-        const source = ruleSvg(
-          gauges.map(g => ({ percent: g.percent, pace: g.pace, color: tone(g.level), title: titleOf(g) })),
-          width,
-        )
         // No width of its own: the rule takes the markup's, up to the band's.
-        rule = svg(source, gauges.map(titleOf).join('; '), undefined, 7)
+        rule = svg(ruleSvg(segments, width), segments.map(s => s.title).join('; '), undefined, 7)
       } else {
         const gap = 2
-        const each = Math.max(4, Math.floor((columns - 2 - gap * (gauges.length - 1)) / gauges.length))
-        rule = (
-          <Box gap={gap}>
-            {gauges.map(g => cellBar(g.percent, each, g.pace, tone(g.level), '▔'))}
-          </Box>
-        )
+        const each = Math.max(4, Math.floor((columns - 2 - gap * (segments.length - 1)) / segments.length))
+        rule = <Box gap={gap}>{segments.map(s => cellBar(s.percent, each, s.pace, s.color, '▔'))}</Box>
       }
 
       return (
@@ -737,9 +671,23 @@ export const register: Register = (on, options) => {
 
       return { from, isHot }
     }
+    // A calm meter is a thin 28 px bar, or one level glyph in the terminal.
     const meter = (id: string, percent: number, pace: number | undefined, level: Level, title: string, color: string, width: number) => {
-      if (isNarrow) return undefined
-      if (Svg) return svg(barSvg({ percent, pace, width, color, title, motion: motion(id, percent, level === 'hot') }), title, width, 14)
+      const isThin = !isLoud(level)
+      if (Svg) {
+        const source = barSvg({
+          percent,
+          pace: isThin ? undefined : pace,
+          width,
+          color,
+          title,
+          height: isThin ? 4 : undefined,
+          motion: motion(id, percent, level === 'hot'),
+        })
+
+        return svg(source, title, width, 14)
+      }
+      if (isThin) return <Text color={percent > 0 ? color : COLOR.track}>{levelGlyph(percent)}</Text>
       const { fill, rest } = smoothBar(percent, Math.round(width / 12))
 
       return (
@@ -749,9 +697,9 @@ export const register: Register = (on, options) => {
         </Text>
       )
     }
-    const working = e.props.isWorking
+    const widthOf = (g: Gauge) => (!isLoud(g.level) ? 28 : isNarrow ? 52 : g === view.spend ? 120 : 96)
     const dot = () => {
-      if (!working) return undefined
+      if (!e.props.isWorking) return undefined
       if (Svg) return svg(liveDotSvg(tone('calm')), 'A turn is running', 12, 12)
 
       return <Text color={COLOR.calm}>{PULSE_FRAMES[pulseFrame % PULSE_FRAMES.length]}</Text>
@@ -759,42 +707,30 @@ export const register: Register = (on, options) => {
 
     return (
       <Box paddingX={1} columnGap={2} flexWrap="wrap" alignItems="center">
-        {gauges.map(g => {
-          const note = noteOf(g)
-
-          return (
-            <Box gap={1} alignItems="center">
-              <Text color={toneOf(g.level)} dimColor={g.level === 'calm'}>
-                {g.level === 'hot' ? `⚠ ${g.label}` : g.label}
-              </Text>
-              {meter(g.id, g.percent, g.pace, g.level, titleOf(g), tone(g.level), g === view.spend ? 132 : 108)}
-              <Text bold color={toneOf(g.level)}>
-                {amount(g)}
-              </Text>
-              {isMoney(g) && <Text dimColor>/ {formatUsd(g.limitUsd!)}</Text>}
-              {!isNarrow && g.resetsAt !== undefined && <Text dimColor>↻ {formatReset(g.resetsAt, now)}</Text>}
-              {note && <Text color={tone(g.level === 'calm' ? 'warm' : g.level)}>{note}</Text>}
-            </Box>
-          )
-        })}
+        {dot()}
+        {gauges.map(g => (
+          <Box gap={1} alignItems="center">
+            {label(g)}
+            {meter(g.id, g.percent, g.pace, g.level, titleOf(g), tone(g.level), widthOf(g))}
+            {value(g)}
+            {isLoud(g.level) && extras(g)}
+          </Box>
+        ))}
+        <Box flexGrow={1} />
         {figures.map(f => (
           <Box gap={1} alignItems="center">
-            {f.isSession && dot()}
-            <Text dimColor>{f.label}</Text>
+            {figureLabel(f)}
             {f.label === 'today' && Svg && !isNarrow && days.length > 1
               ? svg(sparkSvg(days, tone('calm'), 'Spend by day'), 'Spend by day', 44, 16)
               : undefined}
             <Text bold>{f.value}</Text>
           </Box>
         ))}
-        {figures.every(f => !f.isSession) && dot()}
         {ctx !== undefined && (
           <Box gap={1} alignItems="center">
             <Text dimColor>ctx</Text>
-            {meter('context', ctx, undefined, ctxLevel, `context ${Math.round(ctx)}% full`, ctxColor, 60)}
-            <Text bold color={toneOf(ctxLevel)}>
-              {Math.round(ctx)}%
-            </Text>
+            {meter('context', ctx, undefined, ctxLevel, ctxTitle, ctxColor, isLoud(ctxLevel) ? 48 : 28)}
+            {ctxValue}
           </Box>
         )}
       </Box>

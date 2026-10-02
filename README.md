@@ -3,30 +3,36 @@
 A Claude Code mod that puts your real usage on one slim, colored line above the prompt:
 
 ```
-5h ━━━━━━┃━━━ 62% ↻1h48m   7d ━━━┃━━━━━━ 31% ↻Thu   $1.82   ctx ━━━━━━ 48%
+5h ▅ 62%   7d ▃ 31%                                  session $1.82   ctx ▄ 48%
+```
+
+The line stays quiet while everything is calm. A window that turns amber or red grows a full bar, a note and its reset time:
+
+```
+5h ██████▌░ 81% ahead of pace resets 1h48m   7d ▃ 31%  session $1.82   ctx ▄ 48%
 ```
 
 On API pricing with a dollar limit, the same line shows spend instead:
 
 ```
-org ━━━━━━━━┃━━━━━ $312 / $500 ↻Nov 1   today $18.40   session $4.05   ctx 48%
+org ██████▎░░░ $312 / $500 ahead of pace resets Nov 1   today $18.40   session $4.05   ctx ▄ 48%
 ```
 
 - **Bars** are green, amber from 70% (80% for spend) or when you're ahead of pace, and red from 90% (95% for spend).
-- **The ┃ marker** is where you'd be if you spent evenly through the window, so you can tell at a glance whether 62% is fine.
+- **Calm gauges stay small**: a label, a number and a tiny level mark. Once a gauge turns amber or red it gets a full bar, a note such as `ahead of pace` or `limit in ~40m`, and its reset time.
+- **The ┃ marker** on a full bar is where you'd be if you spent evenly through the window, so you can tell at a glance whether 81% is fine.
 - **`/usagebar`** opens a side pane with:
   - a chart of the current 5-hour window, your burn rate, and when you'd hit 100%
   - spend per day, a forecast for the end of the period, when you'd hit the limit, and money left per day
   - cost per turn
 - **Notifications** pop up at 80%, 95% and 100% of any window or limit, once per window.
-- **Narrow terminals** (under 100 columns) drop the bars and keep the numbers.
-- **Four styles**, switched with `/usagebar style <name>`:
-  - `classic`: the thin text bars above. This is the default.
-  - `chips`: each figure in its own rounded pill. A pill turns amber or red, and a note pill appears, when a limit gets close.
-  - `ledger`: the figures as one quiet line, with a thin progress rule under them (one segment per window or cap) and the percentage written out, so `$0.33 of $500` reads `0.1%` rather than an empty bar.
-  - `pulse`: rounded bars that animate in Claude Code Desktop. They grow to new values, a sheen sweeps across them, the pace marker breathes, a red outline glows near a limit, and a dot pulses beside the session cost while a turn runs. With API pricing, `today` also gets a small chart of recent daily spend. The motion stops when your system asks for reduced motion. In a terminal the bars fill by eighths of a cell, and the dot beats while a turn runs.
+- **Narrow bands** (under 100 terminal columns, or 70 on the desktop) drop reset times and shorten bars.
+- **Three styles**, switched with `/usagebar style <name>`:
+  - `pulse`: the line above. This is the default. In Claude Code Desktop calm gauges get a thin bar, loud ones a full rounded bar that grows to new values, with a sheen, a breathing pace marker and a red outline near a limit. A dot pulses at the start of the line while a turn runs. With API pricing, `today` also gets a small chart of recent daily spend. The motion stops when your system asks for reduced motion. In a terminal the full bars fill by eighths of a cell.
+  - `chips`: calm gauges are plain text; a gauge that needs attention gets its own amber or red rounded chip with its bar, note and reset. Session, spend figures and context share one dim chip on the right.
+  - `ledger`: the figures as one quiet line, with a thin rule under them (one segment per window, cap and context). Segments stay grey while calm and take their colour when a gauge turns loud.
 
-  On the desktop, `chips`, `ledger` and `pulse` draw their bars as SVG, so they come out solid and rounded instead of as thin lines of characters. Hover a bar for its percentage and pace.
+  On the desktop the bars are drawn as SVG, so they come out solid and rounded instead of as thin lines of characters. Hover a bar for its percentage and pace.
 
 ## Where the numbers come from
 
@@ -146,7 +152,7 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `display` | `band` | `band` draws the colored line above the prompt. `status` uses the plain-text status line instead. `both` shows the two. |
-| `style` | `classic` | How the band looks: `classic`, `chips`, `ledger` or `pulse`. `/usagebar style pulse` sets it too. |
+| `style` | `pulse` | How the band looks: `pulse`, `chips` or `ledger`. `/usagebar style chips` sets it too. |
 | `show_5h`, `show_7d` | on | The 5-hour and 7-day subscription windows. |
 | `show_spend` | on | The org cap or personal budget gauge. |
 | `show_today` | on | Spend today, and this month when no cap is set. |
@@ -163,7 +169,7 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 ## Commands
 
 - `/usagebar` opens the details pane.
-- `/usagebar style <classic | chips | ledger | pulse>` changes how the band looks. With no name, it says which style is on.
+- `/usagebar style <chips | ledger | pulse>` changes how the band looks. With no name, it says which style is on.
 - `/usagebar status` lists the settings the mod received, what Claude Code reports, and which cap it's showing. Start here when a number looks wrong.
 - `/usagebar hide <parts>`, `/usagebar show <parts>` and `/usagebar only <parts>` choose what the bar shows. Parts are `5h`, `7d`, `spend` (or `budget`, `cap`), `today`, `session` and `context` (or `ctx`). For example, `/usagebar hide 7d context`, or `/usagebar only budget`. `/usagebar show 5h 7d spend today session context` brings everything back.
 - `/usagebar refresh` re-reads the Admin API now.
