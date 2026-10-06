@@ -54,7 +54,12 @@ The mod picks the best source it has:
 | A personal budget you set | Claude Code's own cost, added up across sessions on this machine | `budget ≈$82 / $200` (`≈` because only this machine counts) |
 | None of these | The same local tally | `month ≈$82  today $18.40  session $4.05` |
 
-The Admin API is read first, then the gateway, then your budget, then the monthly cap counted on this machine. The local tally counts each session's own new spend once: a resumed or forked session starts from the total it brings back, and after `/clear` the new conversation counts only what it adds. Costs follow your organization's own model pricing when an admin has set it, and list prices otherwise.
+The Admin API is read first, then the gateway, then your budget, then the monthly cap counted on this machine.
+
+The local tally has two halves:
+
+- **Before the mod was counting:** the first time it starts, the mod reads the last two months of Claude Code's transcripts (`~/.claude/projects`, or under `CLAUDE_CONFIG_DIR`) in the background and prices every reply at list prices, counting each reply once even when a resumed or forked session copied it. `/usagebar import` reads them again, which also replaces anything the live count got wrong before. Claude Code deletes transcripts after 30 days by default, so days already imported are kept.
+- **From then on:** Claude Code's own cost for each session, which follows your organization's model pricing when an admin has set it. Each session's new spend counts once: a resumed or forked session starts from the total it brings back, and after `/clear` the new conversation counts only what it adds.
 
 ## Install
 
@@ -183,6 +188,7 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 - `/usagebar status` lists the settings the mod received, what Claude Code reports, and which cap it's showing. Start here when a number looks wrong.
 - `/usagebar hide <parts>`, `/usagebar show <parts>` and `/usagebar only <parts>` choose what the bar shows. Parts are `5h`, `7d`, `spend` (or `budget`, `cap`), `today`, `session`, `context` (or `ctx`) and `cache`. For example, `/usagebar hide 7d context`, or `/usagebar only budget`. `/usagebar show 5h 7d spend today session context cache` brings everything back.
 - `/usagebar refresh` re-reads the Admin API now.
+- `/usagebar import` re-reads past spend from Claude Code's transcripts (the last two months, at list prices). It runs by itself the first time the mod starts.
 - `/usagebar budget <usd> [monthly | weekly | daily]` sets your personal budget, and its period if you name one (`0` turns the budget off).
 - `/usagebar period <monthly | weekly | daily>` changes when the budget resets. Weeks start Monday. `month`, `week` and `day` work too.
 - `/usagebar close` closes the pane.

@@ -4,7 +4,9 @@ import type { EngineInterface, Register, SessionUsage, Timer } from 'claude-code
 import type { AdminReading, Level, Period, Snapshot } from '../types'
 import { readAdmin } from './admin'
 import type { AdminFetch } from './admin'
-import { applyCost, dayKey, isLedger, isStale, LEDGER_PREFIX, startLedger, summarize } from './ledger'
+import { afterImport, applyCost, dayKey, isLedger, isStale, LEDGER_PREFIX, startLedger, summarize } from './ledger'
+import { isImported, mergeImported, TranscriptTally } from './transcripts'
+import type { ImportedSpend } from './transcripts'
 import type { SessionLedger } from './ledger'
 import {
   barCells,
@@ -15,6 +17,7 @@ import {
   cacheState,
   cacheWarnMs,
   crossedAlerts,
+  DAY,
   formatClock,
   formatDate,
   formatDuration,
@@ -30,6 +33,7 @@ import {
   parseStyle,
   PARTS,
   percentLabel,
+  periodBounds,
   resolveCacheTtl,
   smoothBar,
   sparkline,
@@ -145,6 +149,9 @@ let others: SessionLedger[] = []
 let own: SessionLedger | undefined
 // The session `own` belongs to: /clear and /resume move the process to another id without a session.start.
 let ownId: string | undefined
+// Spend read back from the transcripts, and the read under way.
+let imported: ImportedSpend | undefined
+let importing: Promise<string> | undefined
 let adminKey = ''
 // The band's width at its last draw, for /usagebar status.
 let bandColumns: number | undefined
@@ -280,7 +287,7 @@ function adminFetch($: EngineInterface): AdminFetch {
 }
 
 async function publishSpend($: EngineInterface, now: number) {
-  const spend = summarize(own ? [...others, own] : others, settings.budgetPeriod, now)
+  const spend = summarize(own ? [...others, own] : others, settings.budgetPeriod, now, imported)
   await update($, spendAtom, () => spend)
 }
 
@@ -316,8 +323,123 @@ async function adoptSession($: EngineInterface, sessionId: string, baselineUsd: 
     own = stored
     return
   }
-  own = startLedger(baselineUsd, dayKey(now))
+  own = startLedger(baselineUsd, dayKey(now), imported?.at)
   await $.store.set(LEDGER_PREFIX + sessionId, own)
+}
+
+/** Picks up an import another session made. */
+async function loadImport($: EngineInterface) {
+  const stored = await $.store.get('import')
+  if (isImported(stored) && stored.at > (imported?.at ?? -1)) imported = stored
+}
+
+// $.fs.read refuses files past 4 MiB, and how far back a transcript can matter.
+const READ_LIMIT = 4 * 1024 * 1024
+const IMPORT_DAYS = 62
+
+async function claudeDir($: EngineInterface): Promise<string | undefined> {
+  const trim = (dir: string) => dir.trim().replace(/[\\/]+$/, '')
+  const configured = await $.env.get('CLAUDE_CONFIG_DIR')
+  if (configured?.trim()) return trim(configured)
+  const home = (await $.env.get('HOME')) || (await $.env.get('USERPROFILE'))
+
+  return home?.trim() ? `${trim(home)}/.claude` : undefined
+}
+
+/** Every transcript under `dir` written since `from`: the sessions, and their subagents' beneath them. */
+async function transcriptFiles($: EngineInterface, dir: string, from: number, depth = 0): Promise<{ path: string; size: number }[]> {
+  const entries = await $.fs.list(dir).catch(() => [])
+  const found: { path: string; size: number }[] = []
+  for (const entry of entries) {
+    const path = `${dir}/${entry.name}`
+    if (entry.kind === 'file' && entry.name.endsWith('.jsonl') && entry.mtimeMs >= from) {
+      found.push({ path, size: entry.size })
+    } else if (entry.kind === 'dir' && depth < 3 && entry.name !== 'tool-results') {
+      found.push(...(await transcriptFiles($, path, from, depth + 1)))
+    }
+  }
+
+  return found
+}
+
+async function readTranscript($: EngineInterface, tally: TranscriptTally, file: { path: string; size: number }) {
+  if (file.size <= READ_LIMIT) {
+    const text = await $.fs.read(file.path).catch(() => undefined)
+    if (text !== undefined) {
+      tally.addText(`${text}\n`)
+      return
+    }
+  }
+  // A long session's transcript is past what one read copies, so it streams through the system's own reader.
+  const isWindows = /^[A-Za-z]:|\\/.test(file.path)
+  const argv = isWindows
+    ? ['powershell', '-NoProfile', '-NonInteractive', '-Command', `Get-Content -LiteralPath '${file.path.replaceAll("'", "''")}' -Encoding UTF8`]
+    : ['cat', file.path]
+  let tail = ''
+  for await (const chunk of $.process.spawn({ argv })) {
+    if (chunk.stream === 'stdout') tail = tally.addText(tail + chunk.text)
+  }
+  tally.add(tail)
+}
+
+/**
+ * Prices every reply in the transcripts of the last two months and keeps the days as the spend before now. The
+ * ledgers then count on from here, so what they held before, right or wrong, gives way to the transcripts.
+ */
+async function importTranscripts($: EngineInterface): Promise<string> {
+  const dir = await claudeDir($)
+  if (!dir) return 'Found no home folder to read transcripts from; set CLAUDE_CONFIG_DIR.'
+  const at = await $.clock.now()
+  const lastAtStart = own?.last
+  const from = at - IMPORT_DAYS * DAY
+  const tally = new TranscriptTally(dayKey, from, at)
+  const files = await transcriptFiles($, `${dir}/projects`, from)
+  let failed = 0
+  for (const file of files) {
+    try {
+      await readTranscript($, tally, file)
+    } catch {
+      failed += 1
+    }
+  }
+  await loadImport($)
+  imported = mergeImported(
+    imported,
+    { at, days: tally.days, replies: tally.replies, files: files.length - failed, unpriced: [...tally.unpriced] },
+    dayKey(from),
+  )
+  await $.store.set('import', imported)
+  if (own && ownId !== undefined) {
+    // What this session spent while the transcripts were read came after the import.
+    const grew = lastAtStart !== undefined ? Math.max(0, own.last - lastAtStart) : 0
+    const now = await $.clock.now()
+    own = afterImport(own, at)
+    if (grew > 0) own = { ...own, days: { [dayKey(now)]: grew } }
+    await $.store.set(LEDGER_PREFIX + ownId, own)
+  }
+  const now = await $.clock.now()
+  await publishSpend($, now)
+  await publish($)
+  const month = Object.entries(imported.days)
+    .filter(([day]) => day >= dayKey(periodBounds('monthly', now).start))
+    .reduce((sum, [, usd]) => sum + usd, 0)
+
+  return [
+    `Read ${tally.replies} replies from ${files.length - failed} transcripts: ${formatUsd(month)} this month before now, ${formatUsd(imported.days[dayKey(now)] ?? 0)} today.`,
+    failed > 0 ? `${failed} transcripts could not be read.` : '',
+    tally.unpriced.size > 0 ? `No price known for ${[...tally.unpriced].join(', ')}; those replies are left out.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
+/** One import at a time; a second ask waits on the first. */
+function runImport($: EngineInterface): Promise<string> {
+  importing ??= importTranscripts($).finally(() => {
+    importing = undefined
+  })
+
+  return importing
 }
 
 async function pollAdmin($: EngineInterface) {
@@ -384,8 +506,11 @@ async function absorb($: EngineInterface, usage: Pick<SessionUsage, 'context' | 
     // Moved to another session mid-process (/clear, /resume): its total runs on from, or starts over below, the
     // last reading. With no session.start seen yet there is no reading to go on, so everything counts.
     if (ownId !== sessionId) await adoptSession($, sessionId, own?.last ?? 0, now)
-    const next = applyCost(own, usd, dayKey(now))
-    if (next.last !== own?.last) {
+    await loadImport($)
+    // An import since the last reading holds everything until then.
+    const base = own && imported ? afterImport(own, imported.at) : own
+    const next = applyCost(base, usd, dayKey(now))
+    if (next.last !== own?.last || base !== own) {
       own = next
       await $.store.set(LEDGER_PREFIX + sessionId, next)
     }
@@ -454,6 +579,13 @@ async function statusReport($: EngineInterface): Promise<string> {
       `This machine: ${formatUsd(spend.monthUsd)} this month, ${formatUsd(spend.todayUsd)} today, across ${others.length + (own ? 1 : 0)} sessions`,
     )
   }
+  lines.push(
+    imported
+      ? `Transcripts: ${imported.replies} replies in ${imported.files} files priced at list prices, read ${formatDuration(now - imported.at)} ago; spend since then is counted live. /${COMMAND} import reads them again.${imported.unpriced.length > 0 ? ` No price for ${imported.unpriced.join(', ')}.` : ''}`
+      : importing
+        ? 'Transcripts: being read'
+        : `Transcripts: not read yet; /${COMMAND} import reads the last two months of spend from them.`,
+  )
   const s = view.spend
   lines.push(
     s
@@ -486,6 +618,8 @@ export const register: Register = (on, options) => {
   others = []
   own = undefined
   ownId = undefined
+  imported = undefined
+  importing = undefined
   adminKey = settings.adminKey
   pulseTimer?.cancel()
   pulseTimer = undefined
@@ -500,10 +634,11 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: COMMAND,
       description: 'Usage details pane: windows, spend, forecast and cost per turn',
-      argumentHint: '[status | style <name> | show|hide|only <parts> | budget <usd> [period] | period <p> | refresh | close]',
+      argumentHint: '[status | style <name> | show|hide|only <parts> | budget <usd> [period] | period <p> | import | refresh | close]',
     })
 
     const sessionId = await $.session.id()
+    await loadImport($)
     await loadLedgers($, sessionId, now)
     // Before the first prompt the cost is only what a resumed session restored, which is no new spend.
     await adoptSession($, sessionId, (await $.session.usage()).cost?.usd ?? 0, now)
@@ -522,6 +657,8 @@ export const register: Register = (on, options) => {
     }
 
     await absorb($, await $.session.usage())
+    // Spend from before the mod counted is in the transcripts: read it once, in the background.
+    if (!imported) void runImport($).catch(() => undefined)
     const saved = await $.store.get('cache')
     if (cacheEntries.size === 0 && isSavedCache(saved) && saved.sessionId === sessionId) {
       cacheEntries = new Map(saved.entries)
@@ -542,6 +679,7 @@ export const register: Register = (on, options) => {
     $.clock.every(10 * MINUTE, () => {
       void (async () => {
         const at = await $.clock.now()
+        await loadImport($)
         await loadLedgers($, await $.session.id(), at)
         await publishSpend($, at)
       })()
@@ -682,6 +820,7 @@ export const register: Register = (on, options) => {
       }
     }
     if (verb === 'status') return { text: await statusReport($) }
+    if (verb === 'import') return { text: await runImport($) }
     const opened = await $.ui.open({ id: PANE, title: 'Usage' })
 
     return { text: opened.isPlaced ? 'Usage pane opened.' : 'Usage pane opens once the terminal is wide enough.' }

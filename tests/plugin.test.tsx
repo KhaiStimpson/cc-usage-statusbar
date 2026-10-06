@@ -1,4 +1,5 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 import type { On, SessionUsage } from 'claude-code'
 
 const NOW = new Date(2026, 9, 14, 15, 0, 0).getTime()
@@ -183,17 +184,17 @@ describe('measure', () => {
 
 describe('local spend across sessions', () => {
   const API = { ...GATEWAY, rateLimits: [], cost: { usd: 0 } }
-  const spent = async ($: Parameters<Parameters<typeof test>[2]>[0], usd: number) =>
+  const spent = async ($: Engine, usd: number) =>
     $.session.measure({ context: GATEWAY.context, rateLimits: [], cost: { usd }, changed: ['cost'] })
   /** The process starting the session, as the engine does before the first prompt. */
-  const started = async ($: Parameters<Parameters<typeof test>[2]>[0], on: On) => {
+  const started = async ($: Engine, on: On) => {
     on('command.run', () => ({ text: '' }))
-    on('command.register', () => ({ value: undefined }))
+    on('command.register', () => ({ value: undefined }) as never)
     on('session.start', (_$, e) => ({ cwd: e.cwd }))
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
   }
-  const machine = async ($: Parameters<Parameters<typeof test>[2]>[0]) =>
-    (await $.command.run({ ...refresh, args: 'status' })).text.match(/This machine: [^\n]*/)?.[0]
+  const machine = async ($: Engine) =>
+    (await $.command.run({ ...refresh, args: 'status' })).text?.match(/This machine: [^\n]*/)?.[0]
 
   test('a /clear that keeps the running total counts the earlier conversation once', async ($, on) => {
     const { session, clock } = world(on, API)
@@ -223,6 +224,47 @@ describe('local spend across sessions', () => {
     await started($, on)
     await spent($, 41.5)
     expect(await machine($)).toBe('This machine: $1.50 this month, $1.50 today, across 1 sessions')
+  })
+
+  test('past spend is read from the transcripts, and replaces what the ledgers held', async ($, on) => {
+    const d = new Date(NOW)
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    // A ledger an older version inflated: $20 that was never spent.
+    const { environment, clock } = world(on, API, { 'ledger:old': { last: 30, days: { [today]: 20 }, touched: today } })
+    environment.HOME = '/home/me'
+    const line = (id: string, outputTokens: number) =>
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: new Date(NOW - MINUTES(30)).toISOString(),
+        requestId: `req_${id}`,
+        message: { id: `msg_${id}`, model: 'claude-sonnet-5-5', usage: { output_tokens: outputTokens } },
+      })
+    const root = '/home/me/.claude/projects'
+    const dir = (name: string) => ({ name, kind: 'dir' as const, size: 0, mtimeMs: NOW, isLink: false })
+    const file = (name: string) => ({ name, kind: 'file' as const, size: 100, mtimeMs: NOW, isLink: false })
+    const listing: Record<string, ReturnType<typeof dir>[]> = {
+      [root]: [dir('proj')],
+      [`${root}/proj`]: [file('s1.jsonl'), dir('s1')],
+      [`${root}/proj/s1`]: [dir('subagents'), dir('tool-results')],
+      [`${root}/proj/s1/subagents`]: [file('agent-1.jsonl')],
+    }
+    const files: Record<string, string> = {
+      // $1 each at Sonnet 5.5's $10 per million output tokens; a reply is written once per content block.
+      [`${root}/proj/s1.jsonl`]: [line('a', 100_000), line('a', 100_000), line('b', 100_000)].join('\n'),
+      [`${root}/proj/s1/subagents/agent-1.jsonl`]: line('c', 50_000),
+    }
+    on('fs.list', (_$, e) => ({ value: listing[e.path ?? ''] ?? [] }))
+    on('fs.read', (_$, e) => ({ value: files[e.path] ?? '' }) as never)
+    await started($, on)
+    // The first start reads the transcripts in the background.
+    await clock.settle()
+    expect(await machine($)).toBe('This machine: $2.50 this month, $2.50 today, across 2 sessions')
+
+    // Spend from here on is counted live, on top.
+    await spent($, 1)
+    expect(await machine($)).toBe('This machine: $3.50 this month, $3.50 today, across 2 sessions')
+    const status = (await $.command.run({ ...refresh, args: 'status' })).text ?? ''
+    expect(status).toContain('Transcripts: 3 replies in 2 files')
   })
 
   test('a resumed session picks its own ledger up again', async ($, on) => {
@@ -566,11 +608,11 @@ describe('cache countdown', () => {
   })
 
   /** A reply on the session's model, after the plan's windows have been reported. */
-  const reply = async ($: Parameters<Parameters<typeof test>[2]>[0], usage: SessionUsage) => {
+  const reply = async ($: Engine, usage: SessionUsage) => {
     await $.session.measure({ ...usage, changed: ['rateLimits'] })
     await $.turn.complete(TURN)
   }
-  const shows = async ($: Parameters<Parameters<typeof test>[2]>[0], text: string | RegExp) => {
+  const shows = async ($: Engine, text: string | RegExp) => {
     const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
     const found = await ui.find({ type: 'Text', text })
     await ui.unmount()
