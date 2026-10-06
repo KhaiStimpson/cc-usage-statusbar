@@ -54,7 +54,7 @@ The mod picks the best source it has:
 | A personal budget you set | Claude Code's own cost, added up across sessions on this machine | `budget ≈$82 / $200` (`≈` because only this machine counts) |
 | None of these | The same local tally | `month ≈$82  today $18.40  session $4.05` |
 
-The Admin API is read first, then the gateway, then your budget, then the monthly cap counted on this machine. Costs follow your organization's own model pricing when an admin has set it, and list prices otherwise.
+The Admin API is read first, then the gateway, then your budget, then the monthly cap counted on this machine. The local tally counts each session's own new spend once: a resumed or forked session starts from the total it brings back, and after `/clear` the new conversation counts only what it adds. Costs follow your organization's own model pricing when an admin has set it, and list prices otherwise.
 
 ## Install
 

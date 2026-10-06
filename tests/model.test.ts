@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { pickConsoleLimit, pickEffective, sumCostBuckets } from '../hooks/admin'
-import { applyCost, dayKey, summarize } from '../hooks/ledger'
+import { applyCost, dayKey, startLedger, summarize } from '../hooks/ledger'
 import {
   barCells,
   buildView,
@@ -199,6 +199,11 @@ describe('ledger', () => {
     const b = applyCost(a, 2.25, '2026-10-14')
     const c = applyCost(b, 3, '2026-10-15')
     expect(c.days).toEqual({ '2026-10-14': 2.25, '2026-10-15': 0.75 })
+  })
+
+  test('a started ledger counts only what the total grows by from its baseline', () => {
+    const a = startLedger(40, '2026-10-14')
+    expect(applyCost(a, 41.5, '2026-10-14').days).toEqual({ '2026-10-14': 1.5 })
   })
 
   test('a total that drops starts the count over', () => {

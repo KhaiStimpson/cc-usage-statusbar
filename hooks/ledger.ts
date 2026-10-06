@@ -16,6 +16,11 @@ export function dayKey(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+/** A ledger that counts only what the session's total grows by from `usd`. */
+export function startLedger(usd: number, day: string): SessionLedger {
+  return { last: usd, days: {}, touched: day }
+}
+
 /** Adds what the session's cost total grew by since the last reading to `day`. */
 export function applyCost(prev: SessionLedger | undefined, usd: number, day: string): SessionLedger {
   const last = prev?.last ?? 0

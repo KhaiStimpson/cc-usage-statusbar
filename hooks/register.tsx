@@ -4,7 +4,7 @@ import type { EngineInterface, Register, SessionUsage, Timer } from 'claude-code
 import type { AdminReading, Level, Period, Snapshot } from '../types'
 import { readAdmin } from './admin'
 import type { AdminFetch } from './admin'
-import { applyCost, dayKey, isLedger, isStale, LEDGER_PREFIX, summarize } from './ledger'
+import { applyCost, dayKey, isLedger, isStale, LEDGER_PREFIX, startLedger, summarize } from './ledger'
 import type { SessionLedger } from './ledger'
 import {
   barCells,
@@ -143,6 +143,8 @@ let isStatus = false
 // The other sessions' ledgers, re-read now and then; this one's, kept live.
 let others: SessionLedger[] = []
 let own: SessionLedger | undefined
+// The session `own` belongs to: /clear and /resume move the process to another id without a session.start.
+let ownId: string | undefined
 let adminKey = ''
 // The band's width at its last draw, for /usagebar status.
 let bandColumns: number | undefined
@@ -288,15 +290,34 @@ async function loadLedgers($: EngineInterface, sessionId: string, now: number) {
   for (const key of keys) {
     const value = await $.store.get(key)
     if (!isLedger(value)) continue
-    if (key === LEDGER_PREFIX + sessionId) {
-      own = value
-    } else if (isStale(value, now)) {
+    // This session's ledger, and the one `own` still holds, are counted live.
+    if (key === LEDGER_PREFIX + sessionId || key === LEDGER_PREFIX + ownId) continue
+    if (isStale(value, now)) {
       await $.store.delete(key)
     } else {
       loaded.push(value)
     }
   }
   others = loaded
+}
+
+/**
+ * Points `own` at `sessionId`'s ledger. A session with none yet starts counting from `baselineUsd`, the total it
+ * already carries: a resumed or forked session's cost includes spend its first ledger counted, and after /clear
+ * the total runs on from the conversation before. The baseline is stored at once so a reload keeps it.
+ */
+async function adoptSession($: EngineInterface, sessionId: string, baselineUsd: number, now: number) {
+  if (ownId === sessionId && own) return
+  // The session left behind still counts, under its own key.
+  if (own && ownId !== undefined && ownId !== sessionId) others = [...others, own]
+  const stored = await $.store.get(LEDGER_PREFIX + sessionId)
+  ownId = sessionId
+  if (isLedger(stored)) {
+    own = stored
+    return
+  }
+  own = startLedger(baselineUsd, dayKey(now))
+  await $.store.set(LEDGER_PREFIX + sessionId, own)
 }
 
 async function pollAdmin($: EngineInterface) {
@@ -360,6 +381,9 @@ async function absorb($: EngineInterface, usage: Pick<SessionUsage, 'context' | 
   const usd = snapshot.sessionUsd
   if (usd !== undefined) {
     const sessionId = await $.session.id()
+    // Moved to another session mid-process (/clear, /resume): its total runs on from, or starts over below, the
+    // last reading. With no session.start seen yet there is no reading to go on, so everything counts.
+    if (ownId !== sessionId) await adoptSession($, sessionId, own?.last ?? 0, now)
     const next = applyCost(own, usd, dayKey(now))
     if (next.last !== own?.last) {
       own = next
@@ -461,6 +485,7 @@ export const register: Register = (on, options) => {
   isStatus = settings.display !== 'band'
   others = []
   own = undefined
+  ownId = undefined
   adminKey = settings.adminKey
   pulseTimer?.cancel()
   pulseTimer = undefined
@@ -480,6 +505,8 @@ export const register: Register = (on, options) => {
 
     const sessionId = await $.session.id()
     await loadLedgers($, sessionId, now)
+    // Before the first prompt the cost is only what a resumed session restored, which is no new spend.
+    await adoptSession($, sessionId, (await $.session.usage()).cost?.usd ?? 0, now)
     await publishSpend($, now)
 
     const history = await read($, historyAtom)
@@ -515,7 +542,7 @@ export const register: Register = (on, options) => {
     $.clock.every(10 * MINUTE, () => {
       void (async () => {
         const at = await $.clock.now()
-        await loadLedgers($, sessionId, at)
+        await loadLedgers($, await $.session.id(), at)
         await publishSpend($, at)
       })()
     })

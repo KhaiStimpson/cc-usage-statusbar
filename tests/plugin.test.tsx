@@ -42,7 +42,9 @@ function world(on: On, usage: SessionUsage, stored?: Readonly<Record<string, unk
   const clock = mock.clock(on, { now: NOW })
   mock.store(on, stored)
   on('session.usage', () => ({ value: usage }))
-  on('session.id', () => ({ value: 'session-1' }))
+  // The session's id, which a test changes to stand for a /clear or /resume.
+  const session = { id: 'session-1' }
+  on('session.id', () => ({ value: session.id }))
   // The model the session runs, which a test changes to stand for a /model switch.
   const model = { id: 'claude-sonnet-5-5' }
   on('session.model', () => ({ value: model.id }))
@@ -63,7 +65,7 @@ function world(on: On, usage: SessionUsage, stored?: Readonly<Record<string, unk
     return <Text>engine</Text>
   })
 
-  return { status, toasts, clock, model, claudeSettings, environment }
+  return { status, toasts, clock, model, claudeSettings, environment, session }
 }
 
 /** A finished main-thread turn, which refreshes the prompt cache. */
@@ -167,7 +169,7 @@ describe('measure', () => {
   })
 
   test('pay-per-token spend adds up into today', async ($, on) => {
-    world(on, { ...GATEWAY, rateLimits: [] })
+    world(on, { ...GATEWAY, rateLimits: [], cost: { usd: 0 } })
     for (const usd of [1, 2.5]) {
       await $.session.measure({ context: GATEWAY.context, rateLimits: [], cost: { usd }, changed: ['cost'] })
     }
@@ -176,6 +178,60 @@ describe('measure', () => {
     expect(await ui.find({ type: 'Text', text: '$2.50' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'session' })).toBeDefined()
     await ui.unmount()
+  })
+})
+
+describe('local spend across sessions', () => {
+  const API = { ...GATEWAY, rateLimits: [], cost: { usd: 0 } }
+  const spent = async ($: Parameters<Parameters<typeof test>[2]>[0], usd: number) =>
+    $.session.measure({ context: GATEWAY.context, rateLimits: [], cost: { usd }, changed: ['cost'] })
+  /** The process starting the session, as the engine does before the first prompt. */
+  const started = async ($: Parameters<Parameters<typeof test>[2]>[0], on: On) => {
+    on('command.run', () => ({ text: '' }))
+    on('command.register', () => ({ value: undefined }))
+    on('session.start', (_$, e) => ({ cwd: e.cwd }))
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+  }
+  const machine = async ($: Parameters<Parameters<typeof test>[2]>[0]) =>
+    (await $.command.run({ ...refresh, args: 'status' })).text.match(/This machine: [^\n]*/)?.[0]
+
+  test('a /clear that keeps the running total counts the earlier conversation once', async ($, on) => {
+    const { session, clock } = world(on, API)
+    await started($, on)
+    await spent($, 2)
+    session.id = 'session-2'
+    await spent($, 3)
+    // Past the re-read of every session's ledger from the store.
+    await clock.advance(MINUTES(11))
+    expect(await machine($)).toBe('This machine: $3.00 this month, $3.00 today, across 2 sessions')
+  })
+
+  test('a /clear that starts the total over counts both conversations', async ($, on) => {
+    const { session, clock } = world(on, API)
+    await started($, on)
+    await spent($, 2)
+    session.id = 'session-2'
+    await spent($, 0.5)
+    await spent($, 1)
+    // Past the re-read of every session's ledger from the store.
+    await clock.advance(MINUTES(11))
+    expect(await machine($)).toBe('This machine: $3.00 this month, $3.00 today, across 2 sessions')
+  })
+
+  test('a resumed session counts only what it spends from here', async ($, on) => {
+    world(on, { ...API, cost: { usd: 40 } })
+    await started($, on)
+    await spent($, 41.5)
+    expect(await machine($)).toBe('This machine: $1.50 this month, $1.50 today, across 1 sessions')
+  })
+
+  test('a resumed session picks its own ledger up again', async ($, on) => {
+    const d = new Date(NOW)
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    world(on, { ...API, cost: { usd: 40 } }, { 'ledger:session-1': { last: 40, days: { [today]: 10 }, touched: today } })
+    await started($, on)
+    await spent($, 41)
+    expect(await machine($)).toBe('This machine: $11.00 this month, $11.00 today, across 1 sessions')
   })
 })
 
@@ -244,7 +300,7 @@ describe('admin api', () => {
 
 describe('status command', () => {
   test('says what settings arrived and which cap is shown', { options: { org_limit_usd: 500 } }, async ($, on) => {
-    world(on, { ...GATEWAY, rateLimits: [] })
+    world(on, { ...GATEWAY, rateLimits: [], cost: { usd: 0 } })
     on('command.run', () => ({ text: '' }))
     await $.session.measure({ context: GATEWAY.context, rateLimits: [], cost: { usd: 12 }, changed: ['cost'] })
     const ran = await $.command.run({ ...refresh, args: 'status' })
