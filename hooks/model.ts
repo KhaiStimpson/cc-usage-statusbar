@@ -391,7 +391,7 @@ export function crossedAlerts(view: View, now: number): { key: string; text: str
     for (const at of [80, 95, 100]) {
       if (g.percent < at) continue
       const name =
-        g.id === 'five_hour' ? '5-hour window' : g.id === 'seven_day' ? '7-day window' : g.label === 'usage' ? 'Org spend limit' : 'Budget'
+        g.id === 'five_hour' ? '5-hour window' : g.id === 'seven_day' ? '7-day window' : g.label === 'usage' ? 'Usage spend limit' : 'Budget'
       const amount =
         g.spentUsd !== undefined && g.limitUsd !== undefined
           ? `: ${formatUsd(g.spentUsd)} of ${formatUsd(g.limitUsd)}`
