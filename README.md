@@ -48,13 +48,14 @@ The mod picks the best source it has:
 | You are on | Source | What you see |
 | --- | --- | --- |
 | A Claude subscription | The 5-hour and 7-day windows Claude Code reports | `5h` and `7d` bars, reset countdowns |
+| A Claude login with extra usage or a spend limit, and no Admin API key | The monthly extra-usage spend and limit from `GET /api/oauth/usage`, the call Claude Code's own `/usage` panel makes, using your login | `org $312 / $500`, refreshed every 5 minutes |
 | An Enterprise or Console org with an Admin API key | `GET /v1/organizations/spend_limits/effective` (Enterprise, per member), or `spend_limits` plus `cost_report` (Console org or workspace) | `org $420 / $500`, real figures, refreshed every 5 minutes |
 | A Claude gateway that enforces a spend limit | The `spend_limit` window Claude Code reports | `org 62%`, or dollars once you set `org_limit_usd` |
 | A monthly cap you set (`org_limit_usd`), with no gateway or Admin API | Claude Code's own cost, added up across sessions on this machine | `org ≈$312 / $500` |
 | A personal budget you set | Claude Code's own cost, added up across sessions on this machine | `budget ≈$82 / $200` (`≈` because only this machine counts) |
 | None of these | The same local tally | `month ≈$82  today $18.40  session $4.05` |
 
-The Admin API is read first, then the gateway, then your budget, then the monthly cap counted on this machine.
+The Admin API key is read first (it is the only source with per-workspace figures and daily spend), then your Claude login, then the gateway, then your budget, then the monthly cap counted on this machine.
 
 The local tally has two halves:
 
@@ -179,7 +180,8 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 | `admin_api_key` | — | An `sk-ant-admin…` key. Set it in `/plugin configure` or as `ANTHROPIC_ADMIN_KEY`, never in `settings.json`. |
 | `admin_user` | — | Enterprise: your `user_…` ID or email, to read your own effective limit. Leave it empty on a Console org. |
 | `admin_workspace_id` | — | Console: a `wrkspc_…` ID, to show that workspace's limit and spend instead of the whole org's. |
-| `admin_poll_minutes` | `5` | How often to re-read the Admin API. |
+| `oauth_usage` | on | Without an Admin API key, read the extra-usage spend and limit from your Claude login, the way `/usage` does. The token is read from `CLAUDE_CODE_OAUTH_TOKEN`, `~/.claude/.credentials.json` (or under `CLAUDE_CONFIG_DIR`) or the macOS keychain, is sent only to `api.anthropic.com`, and is never stored or logged. The endpoint is internal to Claude Code, so it may change; `/usagebar status` shows what it answered. |
+| `admin_poll_minutes` | `5` | How often to re-read the Admin API or your Claude login. |
 
 ## Commands
 

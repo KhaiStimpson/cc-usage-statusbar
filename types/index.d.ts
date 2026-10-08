@@ -30,9 +30,11 @@ export type LocalSpend = {
   days: DaySpend[]
 }
 
-/** What the Admin API answered at its last read. */
+/** What the Admin API (or Claude Code's own /usage endpoint) answered at its last read. */
 export type AdminReading = {
   at: number
+  /** Absent means the Admin API. */
+  source?: 'admin' | 'oauth'
   scope: 'user' | 'workspace' | 'organization'
   period: Period
   spentUsd: number
