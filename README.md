@@ -15,7 +15,7 @@ The line stays quiet while everything is calm. A window that turns amber or red 
 On API pricing with a dollar limit, the same line shows spend instead:
 
 ```
-org ██████▎░░░ $312 / $500 ahead of pace resets Nov 1   today $18.40   session $4.05   ctx ▄ 48%
+usage ██████▎░░░ $312 / $500 ahead of pace resets Nov 1   today $18.40   session $4.05   ctx ▄ 48%
 ```
 
 - **Bars** are green, amber from 70% (80% for spend) or when you're ahead of pace, and red from 90% (95% for spend).
@@ -48,10 +48,10 @@ The mod picks the best source it has:
 | You are on | Source | What you see |
 | --- | --- | --- |
 | A Claude subscription | The 5-hour and 7-day windows Claude Code reports | `5h` and `7d` bars, reset countdowns |
-| A Claude login with extra usage or a spend limit, and no Admin API key | The monthly extra-usage spend and limit from `GET /api/oauth/usage`, the call Claude Code's own `/usage` panel makes, using your login | `org $312 / $500`, refreshed every 5 minutes |
-| An Enterprise or Console org with an Admin API key | `GET /v1/organizations/spend_limits/effective` (Enterprise, per member), or `spend_limits` plus `cost_report` (Console org or workspace) | `org $420 / $500`, real figures, refreshed every 5 minutes |
-| A Claude gateway that enforces a spend limit | The `spend_limit` window Claude Code reports | `org 62%`, or dollars once you set `org_limit_usd` |
-| A monthly cap you set (`org_limit_usd`), with no gateway or Admin API | Claude Code's own cost, added up across sessions on this machine | `org ≈$312 / $500` |
+| A Claude login with extra usage or a spend limit, and no Admin API key | The monthly extra-usage spend and limit from `GET /api/oauth/usage`, the call Claude Code's own `/usage` panel makes, using your login | `usage $312 / $500`, refreshed every 5 minutes |
+| An Enterprise or Console org with an Admin API key | `GET /v1/organizations/spend_limits/effective` (Enterprise, per member), or `spend_limits` plus `cost_report` (Console org or workspace) | `usage $420 / $500`, real figures, refreshed every 5 minutes |
+| A Claude gateway that enforces a spend limit | The `spend_limit` window Claude Code reports | `usage 62%`, or dollars once you set `org_limit_usd` |
+| A monthly cap you set (`org_limit_usd`), with no gateway or Admin API | Claude Code's own cost, added up across sessions on this machine | `usage ≈$312 / $500` |
 | A personal budget you set | Claude Code's own cost, added up across sessions on this machine | `budget ≈$82 / $200` (`≈` because only this machine counts) |
 | None of these | The same local tally | `month ≈$82  today $18.40  session $4.05` |
 
@@ -128,7 +128,7 @@ The Admin API key is the exception: don't put it in `settings.json`. Either ente
 "options": { "budget_usd": 200, "budget_period": "monthly" }
 ```
 
-**Your org has a $500/month cap.** Shows `org $312 / $500`. If a Claude gateway enforces the cap, the figure is the gateway's own; otherwise it's counted from Claude Code's spend on this machine and marked `≈`.
+**Your org has a $500/month cap.** Shows `usage $312 / $500`. If a Claude gateway enforces the cap, the figure is the gateway's own; otherwise it's counted from Claude Code's spend on this machine and marked `≈`.
 
 ```json
 "options": { "org_limit_usd": 500 }
@@ -176,7 +176,7 @@ Or type `/usagebar only budget`. Hidden parts still appear in the `/usagebar` pa
 | `cache_write_usd_per_mtok` | `3.75` | Cache-write price per million tokens, for the re-read estimate once the cache has lapsed. `0` hides the estimate. |
 | `budget_usd` | `0` | Your own dollar limit. `0` is off. `/usagebar budget 200` sets it too. |
 | `budget_period` | `monthly` | `monthly`, `weekly` (from Monday) or `daily`. `/usagebar period weekly` sets it too. |
-| `org_limit_usd` | `0` | Your org's monthly spend cap in dollars. With a gateway that enforces it, it turns the gateway's percentage into dollars. Without one, it's compared with Claude Code's spend on this machine and shown as `org ≈$312 / $500`. |
+| `org_limit_usd` | `0` | Your org's monthly spend cap in dollars. With a gateway that enforces it, it turns the gateway's percentage into dollars. Without one, it's compared with Claude Code's spend on this machine and shown as `usage ≈$312 / $500`. |
 | `admin_api_key` | — | An `sk-ant-admin…` key. Set it in `/plugin configure` or as `ANTHROPIC_ADMIN_KEY`, never in `settings.json`. |
 | `admin_user` | — | Enterprise: your `user_…` ID or email, to read your own effective limit. Leave it empty on a Console org. |
 | `admin_workspace_id` | — | Console: a `wrkspc_…` ID, to show that workspace's limit and spend instead of the whole org's. |

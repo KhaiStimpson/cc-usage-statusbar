@@ -93,7 +93,7 @@ describe('spend', () => {
       NOW,
     )
     expect(view.isApiMode).toBe(true)
-    expect(view.spend?.label).toBe('org')
+    expect(view.spend?.label).toBe('usage')
     expect(view.spend?.percent).toBe(62.4)
     expect(view.spend?.spentUsd).toBe(312)
     expect(view.spend?.limitUsd).toBe(500)
@@ -141,7 +141,7 @@ describe('spend', () => {
 
   test('an org cap with no server reporting it counts this machine monthly', () => {
     const view = buildView(snapshot(), null, { todayUsd: 3, periodUsd: 3, monthUsd: 312, days: [] }, { ...OPTIONS, orgLimitUsd: 500 }, NOW)
-    expect(view.spend?.label).toBe('org')
+    expect(view.spend?.label).toBe('usage')
     expect(view.spend?.spentUsd).toBe(312)
     expect(view.spend?.limitUsd).toBe(500)
     expect(view.spend?.isEstimate).toBe(true)

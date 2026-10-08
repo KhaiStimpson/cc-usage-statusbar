@@ -170,7 +170,7 @@ export function spendGauge(
   if (admin && !admin.error && admin.limitUsd) {
     const { start } = periodBounds(admin.period, now, true)
 
-    return amountGauge('org', admin.spentUsd, admin.limitUsd, start, admin.resetsAt, now, false)
+    return amountGauge('usage', admin.spentUsd, admin.limitUsd, start, admin.resetsAt, now, false)
   }
 
   const gateway = snapshot?.windows.find(w => w.kind === 'spend_limit')
@@ -179,7 +179,7 @@ export function spendGauge(
     if (gateway.resetsAt !== undefined && limitUsd !== undefined) {
       const start = inferredStart(gateway.resetsAt, now)
       const gauge = amountGauge(
-        'org',
+        'usage',
         (gateway.percentUsed / 100) * limitUsd,
         limitUsd,
         start,
@@ -198,7 +198,7 @@ export function spendGauge(
 
     return {
       id: 'spend',
-      label: 'org',
+      label: 'usage',
       percent,
       pace,
       resetsAt: gateway.resetsAt,
@@ -217,7 +217,7 @@ export function spendGauge(
   if (options.orgLimitUsd > 0 && local) {
     const { start, end } = periodBounds('monthly', now)
 
-    return amountGauge('org', local.monthUsd, options.orgLimitUsd, start, end, now, true)
+    return amountGauge('usage', local.monthUsd, options.orgLimitUsd, start, end, now, true)
   }
 
   return undefined
@@ -391,7 +391,7 @@ export function crossedAlerts(view: View, now: number): { key: string; text: str
     for (const at of [80, 95, 100]) {
       if (g.percent < at) continue
       const name =
-        g.id === 'five_hour' ? '5-hour window' : g.id === 'seven_day' ? '7-day window' : g.label === 'org' ? 'Org spend limit' : 'Budget'
+        g.id === 'five_hour' ? '5-hour window' : g.id === 'seven_day' ? '7-day window' : g.label === 'usage' ? 'Org spend limit' : 'Budget'
       const amount =
         g.spentUsd !== undefined && g.limitUsd !== undefined
           ? `: ${formatUsd(g.spentUsd)} of ${formatUsd(g.limitUsd)}`

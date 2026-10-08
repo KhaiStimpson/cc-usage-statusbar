@@ -1532,7 +1532,7 @@ export const register: Register = (on, options) => {
               : 'API budget · org limit, gateway'
         const isMoney = gauge.spentUsd !== undefined && gauge.limitUsd !== undefined
         const color = gauge.level === 'calm' ? undefined : tone(gauge.level)
-        const daily = (gauge.label === 'org' && admin && admin.days.length > 0 ? admin.days : (spend?.days ?? [])).slice(-14).map(d => d.usd)
+        const daily = (gauge.label === 'usage' && admin && admin.days.length > 0 ? admin.days : (spend?.days ?? [])).slice(-14).map(d => d.usd)
         const facts: [string, string][] = []
         if (gauge.forecastUsd !== undefined) facts.push(['Forecast', `~${formatUsd(gauge.forecastUsd)}`])
         if (gauge.hitsLimitAt !== undefined) facts.push(['Hits limit', `~${formatDate(gauge.hitsLimitAt)}`])
@@ -1649,7 +1649,7 @@ export const register: Register = (on, options) => {
             : 'org limit · gateway'
       const color = s.level === 'calm' ? undefined : COLOR[s.level]
       const isMoney = s.spentUsd !== undefined && s.limitUsd !== undefined
-      const daily = s.label === 'org' && admin && admin.days.length > 0 ? admin.days : spend?.days ?? []
+      const daily = s.label === 'usage' && admin && admin.days.length > 0 ? admin.days : spend?.days ?? []
       const facts: string[] = []
       if (s.forecastUsd !== undefined) facts.push(`forecast ~${formatUsd(s.forecastUsd)}`)
       if (s.hitsLimitAt !== undefined) facts.push(`hits limit ~${formatDate(s.hitsLimitAt)}`)

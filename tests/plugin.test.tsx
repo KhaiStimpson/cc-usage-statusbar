@@ -128,7 +128,7 @@ describe('band', () => {
   test('a gateway spend limit reads in dollars once its amount is set', { options: { org_limit_usd: 500 } }, async ($, on) => {
     world(on, GATEWAY)
     const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
-    expect(await ui.find({ type: 'Text', text: 'org' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'usage' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '$312' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '/ $500' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: '$4.05' })).toBeDefined()
