@@ -277,6 +277,43 @@ describe('local spend across sessions', () => {
   })
 })
 
+describe('claude login usage', () => {
+  test('reads the extra-usage limit with the login Claude Code keeps', async ($, on) => {
+    const { environment } = world(on, { ...GATEWAY, rateLimits: [] })
+    environment.HOME = '/home/me'
+    on('fs.list', () => ({ value: [] }))
+    on('fs.read', (_$, e) => ({
+      value: e.path === '/home/me/.claude/.credentials.json' ? JSON.stringify({ claudeAiOauth: { accessToken: 'tok', expiresAt: NOW + HOURS(1) } }) : '',
+    }) as never)
+    const asked: { url: string; headers?: Record<string, string> }[] = []
+    on('http.fetch', (_$, e) => {
+      asked.push({ url: e.url, headers: e.init?.headers })
+      const body = { extra_usage: { is_enabled: true, monthly_limit: 50000, used_credits: 31200, utilization: 62.4 } }
+
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(body) } }
+    })
+    on('command.run', () => ({ text: '' }))
+
+    const ran = await $.command.run(refresh)
+    expect(ran.text).toBe('Claude login: extra usage with a monthly limit.')
+    expect(asked[0]?.url).toBe('https://api.anthropic.com/api/oauth/usage')
+    expect(asked[0]?.headers?.Authorization).toBe('Bearer tok')
+    expect(asked[0]?.headers?.['anthropic-beta']).toBe('oauth-2025-04-20')
+
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    expect(await ui.find({ type: 'Text', text: '$312' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '/ $500' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('without a login it stays quiet and says why in status', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    on('command.run', () => ({ text: '' }))
+    const ran = await $.command.run(refresh)
+    expect(ran.text).toBe('Claude login: no Claude login found (an API key has none).')
+  })
+})
+
 describe('admin api', () => {
   test(
     'an Enterprise member reads their effective limit and spend',

@@ -4,6 +4,8 @@ import type { EngineInterface, Register, SessionUsage, Timer } from 'claude-code
 import type { AdminReading, Level, Period, Snapshot } from '../types'
 import { readAdmin } from './admin'
 import type { AdminFetch } from './admin'
+import { readOauthUsage, tokenFromCredentials } from './oauth'
+import type { OauthResult } from './oauth'
 import { afterImport, applyCost, dayKey, isLedger, isStale, LEDGER_PREFIX, startLedger, summarize } from './ledger'
 import { isImported, mergeImported, TranscriptTally } from './transcripts'
 import type { ImportedSpend } from './transcripts'
@@ -87,6 +89,7 @@ type Settings = Options & {
   adminKey: string
   adminUser: string
   adminWorkspaceId: string
+  oauthUsage: boolean
   pollMinutes: number
   shown: Shown
   cacheTtl: CacheTtlSetting
@@ -108,6 +111,7 @@ function readSettings(options: Readonly<Record<string, unknown>>): Settings {
     adminKey: String(options.admin_api_key ?? '').trim(),
     adminUser: String(options.admin_user ?? '').trim(),
     adminWorkspaceId: String(options.admin_workspace_id ?? '').trim(),
+    oauthUsage: options.oauth_usage !== false,
     pollMinutes: Math.max(1, Number(options.admin_poll_minutes ?? 5) || 5),
     shown: Object.fromEntries(PARTS.map(part => [part, options[`show_${part}`] !== false])) as Shown,
     cacheTtl: parseCacheTtlSetting(String(options.cache_ttl ?? 'auto')),
@@ -153,6 +157,8 @@ let ownId: string | undefined
 let imported: ImportedSpend | undefined
 let importing: Promise<string> | undefined
 let adminKey = ''
+// What the last read of Claude Code's /usage endpoint came to, for /usagebar status.
+let oauthNote = ''
 // The band's width at its last draw, for /usagebar status.
 let bandColumns: number | undefined
 // Pulse: the percent each bar last drew at, so the next one grows from there.
@@ -442,8 +448,53 @@ function runImport($: EngineInterface): Promise<string> {
   return importing
 }
 
+/** Where the org figures come from: an Admin API key if there is one, else the Claude login, else nowhere. */
+const spendSource = () => (adminKey ? 'admin' : settings.oauthUsage ? 'oauth' : undefined)
+
+/** The login Claude Code itself uses for /usage: the environment, its credentials file, then the macOS keychain. */
+async function oauthToken($: EngineInterface, now: number): Promise<{ token?: string; note: string }> {
+  const fromEnv = ((await $.env.get('CLAUDE_CODE_OAUTH_TOKEN')) ?? '').trim()
+  if (fromEnv) return { token: fromEnv, note: '' }
+  const dir = await claudeDir($)
+  const file = dir ? await $.fs.read(`${dir}/.credentials.json`).catch(() => undefined) : undefined
+  let found = file ? tokenFromCredentials(file, now) : {}
+  if (!file) {
+    let out = ''
+    try {
+      for await (const chunk of $.process.spawn({ argv: ['security', 'find-generic-password', '-s', 'Claude Code-credentials', '-w'] })) {
+        if (chunk.stream === 'stdout') out += chunk.text
+      }
+    } catch {
+      // Not macOS, or no keychain entry.
+    }
+    found = tokenFromCredentials(out, now)
+  }
+  if (found.token) return { token: found.token, note: '' }
+
+  return { note: found.isExpired ? 'login token has expired; Claude Code renews it on its next request' : 'no Claude login found (an API key has none)' }
+}
+
+async function pollOauth($: EngineInterface) {
+  const now = await $.clock.now()
+  const { token, note: tokenNote } = await oauthToken($, now)
+  const result: OauthResult = token ? await readOauthUsage(adminFetch($), token, now) : { note: tokenNote, isFailure: true }
+  oauthNote = result.note
+  const kept = await read($, adminAtom)
+  // A failed read keeps the last good figures; a good read with nothing in it clears them.
+  if (result.reading) {
+    await update($, adminAtom, () => result.reading ?? null)
+    await $.store.set('admin', result.reading)
+  } else if (!result.isFailure && kept?.source === 'oauth') {
+    await update($, adminAtom, () => null)
+    await $.store.delete('admin')
+  }
+  await publish($)
+}
+
 async function pollAdmin($: EngineInterface) {
-  if (!adminKey) return
+  const source = spendSource()
+  if (source === 'oauth') return pollOauth($)
+  if (!source) return
   const now = await $.clock.now()
   const reading: AdminReading = await readAdmin(
     adminFetch($),
@@ -565,6 +616,11 @@ async function statusReport($: EngineInterface): Promise<string> {
       ? `Reported by Claude Code: ${kinds.join(', ')}`
       : 'Reported by Claude Code: no rate-limit or spend-limit windows (API pricing without a gateway limit, or no reply yet)',
   )
+  if (!adminKey && settings.oauthUsage) {
+    lines.push(
+      `Claude login (/usage): ${oauthNote || 'not read yet'}${admin?.source === 'oauth' ? ` · ${formatUsd(admin.spentUsd)}${admin.limitUsd ? ` of ${formatUsd(admin.limitUsd)}` : ', no limit set'}, read ${formatDuration(now - admin.at)} ago` : ''}`,
+    )
+  }
   if (adminKey) {
     lines.push(
       admin === null
@@ -652,7 +708,7 @@ export const register: Register = (on, options) => {
       await update($, alertsAtom, () => alerts.filter((a): a is string => typeof a === 'string'))
     }
     const admin = await $.store.get('admin')
-    if (adminKey && (await read($, adminAtom)) === null && admin && typeof admin === 'object') {
+    if (spendSource() && (await read($, adminAtom)) === null && admin && typeof admin === 'object') {
       await update($, adminAtom, () => admin as AdminReading)
     }
 
@@ -666,7 +722,7 @@ export const register: Register = (on, options) => {
       cacheColdTokens = saved.coldTokens
     }
 
-    if (adminKey) {
+    if (spendSource()) {
       void pollAdmin($)
       $.clock.every(settings.pollMinutes * MINUTE, () => void pollAdmin($))
     }
@@ -755,8 +811,10 @@ export const register: Register = (on, options) => {
       return { text: 'Usage pane closed.' }
     }
     if (verb === 'refresh') {
-      if (!adminKey) return { text: 'No Admin API key set; local figures refresh on their own.' }
+      const source = spendSource()
+      if (!source) return { text: 'No Admin API key set; local figures refresh on their own.' }
       await pollAdmin($)
+      if (source === 'oauth') return { text: `Claude login: ${oauthNote}.` }
       const admin = await read($, adminAtom)
 
       return { text: admin?.error ? `Admin API: ${admin.error}` : 'Spend refreshed from the Admin API.' }
@@ -1531,7 +1589,7 @@ export const register: Register = (on, options) => {
           <Box flexDirection="column" gap={1} width={cols}>
             {items}
             <Box gap={1}>
-              {adminKey && <Button key="refresh" label="Refresh" hotkey="r" onPress={() => void pollAdmin($)} />}
+              {spendSource() && <Button key="refresh" label="Refresh" hotkey="r" onPress={() => void pollAdmin($)} />}
               <Button key="close" label="Close" role="dismiss" onPress={() => void $.ui.close({ id: PANE })} />
             </Box>
           </Box>
@@ -1587,7 +1645,7 @@ export const register: Register = (on, options) => {
         s.label === 'budget'
           ? `budget · ${settings.budgetPeriod}, this machine`
           : admin && !admin.error && admin.limitUsd
-            ? `org limit · ${admin.scope}, Admin API`
+            ? `org limit · ${admin.scope}, ${admin.source === 'oauth' ? 'Claude login' : 'Admin API'}`
             : 'org limit · gateway'
       const color = s.level === 'calm' ? undefined : COLOR[s.level]
       const isMoney = s.spentUsd !== undefined && s.limitUsd !== undefined
@@ -1648,7 +1706,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" gap={1} paddingX={1}>
         {sections}
         <Box gap={1}>
-          {adminKey && <Button key="refresh" label="Refresh" hotkey="r" onPress={() => void pollAdmin($)} />}
+          {spendSource() && <Button key="refresh" label="Refresh" hotkey="r" onPress={() => void pollAdmin($)} />}
           <Button key="close" label="Close" role="dismiss" onPress={() => void $.ui.close({ id: PANE })} />
         </Box>
       </Box>

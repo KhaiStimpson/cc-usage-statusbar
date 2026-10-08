@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { parseOauthUsage, tokenFromCredentials } from '../hooks/oauth'
 import { pickConsoleLimit, pickEffective, sumCostBuckets } from '../hooks/admin'
 import { applyCost, dayKey, startLedger, summarize } from '../hooks/ledger'
 import {
@@ -507,5 +508,32 @@ describe('cache lifetime', () => {
     expect(parseCacheTtlSetting('auto')).toBe('auto')
     expect(parseCacheTtlSetting('1h')).toBe('1h')
     expect(parseCacheTtlSetting('bogus')).toBe('auto')
+  })
+})
+
+describe('claude login usage', () => {
+  const now = Date.UTC(2026, 9, 14)
+
+  test('extra usage becomes a monthly reading in dollars', () => {
+    const { reading } = parseOauthUsage({ extra_usage: { is_enabled: true, monthly_limit: 50000, used_credits: 31250, utilization: 62.5 } }, now)
+    expect(reading).toMatchObject({ source: 'oauth', period: 'monthly', spentUsd: 312.5, limitUsd: 500 })
+  })
+
+  test('no limit still reports the spend', () => {
+    const { reading } = parseOauthUsage({ extra_usage: { is_enabled: true, monthly_limit: null, used_credits: 1200 } }, now)
+    expect(reading?.spentUsd).toBe(12)
+    expect(reading?.limitUsd).toBeUndefined()
+  })
+
+  test('a missing or disabled extra_usage gives no reading', () => {
+    expect(parseOauthUsage({ five_hour: { utilization: 3 } }, now).reading).toBeUndefined()
+    expect(parseOauthUsage({ extra_usage: { is_enabled: false } }, now).reading).toBeUndefined()
+  })
+
+  test('the token comes from the credentials unless it has expired', () => {
+    const creds = (expiresAt: number) => JSON.stringify({ claudeAiOauth: { accessToken: 'tok', expiresAt } })
+    expect(tokenFromCredentials(creds(now + 1000), now)).toEqual({ token: 'tok' })
+    expect(tokenFromCredentials(creds(now - 1000), now)).toEqual({ isExpired: true })
+    expect(tokenFromCredentials('not json', now)).toEqual({})
   })
 })

@@ -1,7 +1,7 @@
 {
   "name": "usage-statusbar",
   "displayName": "Usage Status Bar",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "A slim colored line above the prompt with your real usage: subscription windows, org spend limits, budgets, context and cost",
   "author": {
     "name": "Khai Stimpson"
@@ -134,10 +134,16 @@
       "description": "Console orgs: the workspace ID (wrkspc_...) whose limit and spend to show. Empty uses the organization's limit.",
       "default": ""
     },
+    "oauth_usage": {
+      "type": "boolean",
+      "title": "Read extra-usage spend from your Claude login",
+      "description": "Without an Admin API key, reads the monthly extra-usage spend and limit that Claude Code's /usage panel shows, using your Claude login. Off stops that call.",
+      "default": true
+    },
     "admin_poll_minutes": {
       "type": "number",
       "title": "Admin API refresh (minutes)",
-      "description": "How often to re-read spend from the Admin API.",
+      "description": "How often to re-read spend from the Admin API or your Claude login.",
       "default": 5,
       "min": 1,
       "max": 60
