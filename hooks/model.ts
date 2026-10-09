@@ -50,6 +50,8 @@ export type View = {
   monthUsd?: number
   isMonthEstimate?: boolean
   todayUsd?: number
+  /** Today's figure may miss spend from before it was first read. */
+  isTodayEstimate?: boolean
   sessionUsd?: number
   contextPercent?: number
   /** No subscription windows: the account pays per token. */
@@ -68,6 +70,13 @@ export function levelOf(percent: number, pace: number | undefined, warmAt: numbe
 
 export function isAheadOf(percent: number, pace: number | undefined): boolean {
   return pace !== undefined && percent >= 25 && percent - pace >= 10
+}
+
+/** The local calendar day of `ms`, as YYYY-MM-DD. */
+export function dayKey(ms: number): string {
+  const d = new Date(ms)
+
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 /** Start and end of the period holding `now`, in local time or UTC. */
@@ -170,7 +179,9 @@ export function spendGauge(
   if (admin && !admin.error && admin.limitUsd) {
     const { start } = periodBounds(admin.period, now, true)
 
-    return amountGauge('usage', admin.spentUsd, admin.limitUsd, start, admin.resetsAt, now, false)
+    const gauge = amountGauge('usage', admin.spentUsd, admin.limitUsd, start, admin.resetsAt, now, false)
+
+    return admin.isLimitReached ? { ...gauge, level: 'hot' } : gauge
   }
 
   const gateway = snapshot?.windows.find(w => w.kind === 'spend_limit')
@@ -238,13 +249,16 @@ export function buildView(
   const spend = spendGauge(snapshot, admin, local, options, now)
   const hasAdminMonth = admin !== null && !admin.error && admin.period === 'monthly'
   const monthUsd = !spend && isApiMode ? (hasAdminMonth ? admin.spentUsd : local?.monthUsd) : undefined
+  // The login's spend is the whole account's, so its day figure covers every device; this machine's covers one.
+  const loginToday = admin && !admin.error && admin.source === 'oauth' ? admin.days.find(d => d.day === dayKey(now)) : undefined
 
   return {
     windows,
     spend,
     monthUsd,
     isMonthEstimate: !hasAdminMonth,
-    todayUsd: isApiMode ? local?.todayUsd : undefined,
+    todayUsd: loginToday ? loginToday.usd : isApiMode ? local?.todayUsd : undefined,
+    isTodayEstimate: loginToday ? admin?.isTodayEstimate : undefined,
     sessionUsd: snapshot?.sessionUsd,
     contextPercent: snapshot?.contextPercent,
     isApiMode,
@@ -376,7 +390,7 @@ export function statusText(view: View, rate: number | undefined, now: number): s
     )
   }
   if (view.monthUsd !== undefined) parts.push(`month ${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`)
-  if (view.todayUsd !== undefined) parts.push(`today ${formatUsd(view.todayUsd)}`)
+  if (view.todayUsd !== undefined) parts.push(`today ${view.isTodayEstimate ? '≈' : ''}${formatUsd(view.todayUsd)}`)
   if (view.sessionUsd !== undefined) parts.push(view.isApiMode ? `session ${formatUsd(view.sessionUsd)}` : formatUsd(view.sessionUsd))
   if (view.contextPercent !== undefined) parts.push(`ctx ${Math.round(view.contextPercent)}%`)
 
@@ -442,6 +456,7 @@ export function visibleView(view: View, shown: Shown): View {
     spend: shown.spend ? view.spend : undefined,
     monthUsd: shown.today ? view.monthUsd : undefined,
     todayUsd: shown.today ? view.todayUsd : undefined,
+    isTodayEstimate: shown.today ? view.isTodayEstimate : undefined,
     sessionUsd: shown.session ? view.sessionUsd : undefined,
     contextPercent: shown.context ? view.contextPercent : undefined,
   }

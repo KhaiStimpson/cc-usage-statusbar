@@ -1,5 +1,5 @@
 import type { DaySpend, LocalSpend, Period } from '../types'
-import { DAY, periodBounds } from './model'
+import { DAY, dayKey, periodBounds } from './model'
 import type { ImportedSpend } from './transcripts'
 
 /**
@@ -12,11 +12,7 @@ export type SessionLedger = { last: number; days: Record<string, number>; touche
 
 export const LEDGER_PREFIX = 'ledger:'
 
-export function dayKey(ms: number): string {
-  const d = new Date(ms)
-
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
+export { dayKey }
 
 /** A ledger that counts only what the session's total grows by from `usd`. */
 export function startLedger(usd: number, day: string, since?: number): SessionLedger {
