@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { parseOauthUsage, tokenFromCredentials } from '../hooks/oauth'
+import { advanceDays, daysOf, parseOauthUsage, tokenFromCredentials } from '../hooks/oauth'
 import { pickConsoleLimit, pickEffective, sumCostBuckets } from '../hooks/admin'
 import { applyCost, dayKey, startLedger, summarize } from '../hooks/ledger'
 import {
@@ -525,6 +525,22 @@ describe('claude login usage', () => {
     expect(reading?.limitUsd).toBeUndefined()
   })
 
+  test('the decimal places and the newer spend block set the scale', () => {
+    const body = { extra_usage: { is_enabled: true, monthly_limit: 500000, used_credits: 31570, decimal_places: 3 } }
+    expect(parseOauthUsage(body, now).reading).toMatchObject({ spentUsd: 31.57, limitUsd: 500 })
+    const spend = { spend: { enabled: true, used: { amount_minor: 3157, exponent: 2 }, limit: { amount_minor: 50000, exponent: 2 } } }
+    expect(parseOauthUsage(spend, now).reading).toMatchObject({ spentUsd: 31.57, limitUsd: 500 })
+  })
+
+  test('a reached limit and another currency are said, and a disabled reason explained', () => {
+    const reached = parseOauthUsage({ extra_usage: { is_enabled: true, monthly_limit: 5000, used_credits: 5000, currency: 'EUR', spend_limit_reached: true } }, now)
+    expect(reached.reading?.isLimitReached).toBe(true)
+    expect(reached.note).toBe('extra usage with a monthly limit, limit reached, amounts in EUR')
+    expect(parseOauthUsage({ extra_usage: { is_enabled: false, disabled_reason: 'overage_not_provisioned' } }, now).note).toBe(
+      'extra usage is not enabled on this account (overage_not_provisioned)',
+    )
+  })
+
   test('a missing or disabled extra_usage gives no reading', () => {
     expect(parseOauthUsage({ five_hour: { utilization: 3 } }, now).reading).toBeUndefined()
     expect(parseOauthUsage({ extra_usage: { is_enabled: false } }, now).reading).toBeUndefined()
@@ -535,5 +551,62 @@ describe('claude login usage', () => {
     expect(tokenFromCredentials(creds(now + 1000), now)).toEqual({ token: 'tok' })
     expect(tokenFromCredentials(creds(now - 1000), now)).toEqual({ isExpired: true })
     expect(tokenFromCredentials('not json', now)).toEqual({})
+  })
+})
+
+describe('login spend by day', () => {
+  const noon = (day: number) => new Date(2026, 9, day, 12).getTime()
+  const today = (state: ReturnType<typeof advanceDays>, at: number) => daysOf(state, at).at(-1)?.usd
+
+  test('growth in the total lands on the day it was seen, from any device', () => {
+    let state = advanceDays(undefined, 30, noon(14))
+    expect(today(state, noon(14))).toBe(0)
+    state = advanceDays(state, 32.5, noon(14) + HOUR)
+    state = advanceDays(state, 33, noon(14) + 2 * HOUR)
+    expect(today(state, noon(14))).toBeCloseTo(3)
+    expect(state.startDay).toBe(dayKey(noon(14)))
+  })
+
+  test('spend found at the first reading of a new day belongs to the day before', () => {
+    let state = advanceDays(undefined, 30, noon(14))
+    state = advanceDays(state, 34, noon(15))
+    expect(daysOf(state, noon(15)).slice(-2).map(d => d.usd)).toEqual([4, 0])
+    state = advanceDays(state, 35, noon(15) + HOUR)
+    expect(today(state, noon(15))).toBe(1)
+    expect(state.startDay).toBe(dayKey(noon(14)))
+  })
+
+  test('days nobody read are not guessed at', () => {
+    let state = advanceDays(undefined, 30, noon(10))
+    state = advanceDays(state, 80, noon(14))
+    expect(daysOf(state, noon(14)).every(d => d.usd === 0)).toBe(true)
+    expect(state.startDay).toBe(dayKey(noon(14)))
+  })
+
+  test('a new month starts the count again', () => {
+    let state = advanceDays(undefined, 400, noon(14))
+    state = advanceDays(state, 12, noon(14) + HOUR)
+    expect(today(state, noon(14))).toBe(12)
+  })
+
+  test('the login\'s day figure becomes today in the view, estimated until a full day has been read', () => {
+    const state = advanceDays(advanceDays(undefined, 30, noon(14)), 33, noon(14) + HOUR)
+    const admin = {
+      at: noon(14),
+      source: 'oauth' as const,
+      scope: 'user' as const,
+      period: 'monthly' as const,
+      spentUsd: 33,
+      limitUsd: 500,
+      resetsAt: noon(14) + 20 * DAY,
+      days: daysOf(state, noon(14)),
+      isTodayEstimate: true,
+    }
+    const options = { budgetUsd: 0, budgetPeriod: 'monthly' as const, orgLimitUsd: 0 }
+    const view = buildView(null, admin, null, options, noon(14))
+    expect(view.todayUsd).toBeCloseTo(3)
+    expect(view.isTodayEstimate).toBe(true)
+    expect(buildView(null, admin, null, options, noon(15)).todayUsd).toBeUndefined()
+    expect(buildView(null, { ...admin, isLimitReached: true }, null, options, noon(14)).spend?.level).toBe('hot')
   })
 })

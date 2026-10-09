@@ -4,7 +4,7 @@ import type { EngineInterface, Register, SessionUsage, Timer } from 'claude-code
 import type { AdminReading, Level, Period, Snapshot } from '../types'
 import { readAdmin } from './admin'
 import type { AdminFetch } from './admin'
-import { readOauthUsage, tokenFromCredentials } from './oauth'
+import { advanceDays, daysOf, isOauthDays, readOauthUsage, tokenFromCredentials } from './oauth'
 import type { OauthResult } from './oauth'
 import { afterImport, applyCost, dayKey, isLedger, isStale, LEDGER_PREFIX, startLedger, summarize } from './ledger'
 import { isImported, mergeImported, TranscriptTally } from './transcripts'
@@ -482,8 +482,13 @@ async function pollOauth($: EngineInterface) {
   const kept = await read($, adminAtom)
   // A failed read keeps the last good figures; a good read with nothing in it clears them.
   if (result.reading) {
-    await update($, adminAtom, () => result.reading ?? null)
-    await $.store.set('admin', result.reading)
+    // The endpoint gives only a running total; the day figures are what it grew by, across every device.
+    const stored = await $.store.get('oauth-days')
+    const state = advanceDays(isOauthDays(stored) ? stored : undefined, result.reading.spentUsd, now)
+    await $.store.set('oauth-days', state)
+    const reading = { ...result.reading, days: daysOf(state, now), isTodayEstimate: state.startDay === dayKey(now) }
+    await update($, adminAtom, () => reading)
+    await $.store.set('admin', reading)
   } else if (!result.isFailure && kept?.source === 'oauth') {
     await update($, adminAtom, () => null)
     await $.store.delete('admin')
@@ -917,7 +922,7 @@ export const register: Register = (on, options) => {
       `${g.label}: ${percentLabel(g.percent)} used${g.pace !== undefined ? `, ${percentLabel(g.pace)} of the window gone` : ''}`
     const figures: { label: string; value: string; isSession?: boolean }[] = []
     if (view.monthUsd !== undefined) figures.push({ label: 'month', value: `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}` })
-    if (view.todayUsd !== undefined) figures.push({ label: 'today', value: formatUsd(view.todayUsd) })
+    if (view.todayUsd !== undefined) figures.push({ label: 'today', value: `${view.isTodayEstimate ? '≈' : ''}${formatUsd(view.todayUsd)}` })
     if (view.sessionUsd !== undefined) figures.push({ label: 'session', value: formatUsd(view.sessionUsd), isSession: true })
 
     const label = (g: Gauge) => (
@@ -1541,7 +1546,7 @@ export const register: Register = (on, options) => {
           facts.push(['Left to spend', `${formatUsd((gauge.limitUsd! - gauge.spentUsd!) / daysLeft)}/day`])
         }
         if (view.monthUsd !== undefined) facts.push(['Month', `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`])
-        if (spend && view.isApiMode) facts.push(['Today', formatUsd(spend.todayUsd)])
+        if (view.todayUsd !== undefined) facts.push(['Today', `${view.isTodayEstimate ? '≈' : ''}${formatUsd(view.todayUsd)}`])
         section(
           <Box flexDirection="column" gap={1}>
             <Box justifyContent="space-between">
@@ -1572,11 +1577,11 @@ export const register: Register = (on, options) => {
             )}
           </Box>,
         )
-      } else if (view.monthUsd !== undefined || (spend && view.isApiMode)) {
+      } else if (view.monthUsd !== undefined || view.todayUsd !== undefined) {
         section(
           <Box>
             {view.monthUsd !== undefined && fact('Month', `${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`)}
-            {spend && view.isApiMode && fact('Today', formatUsd(spend.todayUsd))}
+            {view.todayUsd !== undefined && fact('Today', `${view.isTodayEstimate ? '≈' : ''}${formatUsd(view.todayUsd)}`)}
           </Box>,
         )
       }
@@ -1675,7 +1680,7 @@ export const register: Register = (on, options) => {
 
     const money: string[] = []
     if (view.monthUsd !== undefined) money.push(`month ${view.isMonthEstimate ? '≈' : ''}${formatUsd(view.monthUsd)}`)
-    if (spend && view.isApiMode) money.push(`today ${formatUsd(spend.todayUsd)}`)
+    if (view.todayUsd !== undefined) money.push(`today ${view.isTodayEstimate ? '≈' : ''}${formatUsd(view.todayUsd)}`)
     if (view.sessionUsd !== undefined) money.push(`session ${formatUsd(view.sessionUsd)}`)
     if (money.length > 0) sections.push(<Text>{money.join(' · ')}</Text>)
 

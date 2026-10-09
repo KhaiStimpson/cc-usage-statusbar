@@ -48,12 +48,14 @@ The mod picks the best source it has:
 | You are on | Source | What you see |
 | --- | --- | --- |
 | A Claude subscription | The 5-hour and 7-day windows Claude Code reports | `5h` and `7d` bars, reset countdowns |
-| A Claude login with extra usage or a spend limit, and no Admin API key | The monthly extra-usage spend and limit from `GET /api/oauth/usage`, the call Claude Code's own `/usage` panel makes, using your login | `usage $312 / $500`, refreshed every 5 minutes |
+| A Claude login with extra usage or a spend limit, and no Admin API key | The monthly extra-usage spend and limit from `GET /api/oauth/usage`, the call Claude Code's own `/usage` panel makes, using your login | `usage $312 / $500` and `today $4.20`, refreshed every 5 minutes |
 | An Enterprise or Console org with an Admin API key | `GET /v1/organizations/spend_limits/effective` (Enterprise, per member), or `spend_limits` plus `cost_report` (Console org or workspace) | `usage $420 / $500`, real figures, refreshed every 5 minutes |
 | A Claude gateway that enforces a spend limit | The `spend_limit` window Claude Code reports | `usage 62%`, or dollars once you set `org_limit_usd` |
 | A monthly cap you set (`org_limit_usd`), with no gateway or Admin API | Claude Code's own cost, added up across sessions on this machine | `usage ≈$312 / $500` |
 | A personal budget you set | Claude Code's own cost, added up across sessions on this machine | `budget ≈$82 / $200` (`≈` because only this machine counts) |
 | None of these | The same local tally | `month ≈$82  today $18.40  session $4.05` |
+
+On a Claude login, `today` and the spend-by-day chart cover every device: the endpoint reports only the month's running total, so the plugin keeps what that total grows by each day. Spend it finds at the first reading after a gap of two days or more is not guessed at, and `today` shows `≈` until a full day has been read. The gauge turns red when the server says the limit is reached.
 
 The Admin API key is read first (it is the only source with per-workspace figures and daily spend), then your Claude login, then the gateway, then your budget, then the monthly cap counted on this machine.
 

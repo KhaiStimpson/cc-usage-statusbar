@@ -41,6 +41,10 @@ export type AdminReading = {
   limitUsd?: number
   resetsAt: number
   days: DaySpend[]
+  /** The day figure may miss spend from before the login was first read. */
+  isTodayEstimate?: boolean
+  /** The server says the limit has been reached. */
+  isLimitReached?: boolean
   error?: string
 }
 
