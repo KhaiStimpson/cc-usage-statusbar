@@ -33,17 +33,21 @@ import {
   parseCacheTtlSetting,
   parsePart,
   parseStyle,
+  parseTheme,
   PARTS,
   percentLabel,
   periodBounds,
   resolveCacheTtl,
+  ringGlyph,
   smoothBar,
   sparkline,
   statusText,
   STYLES,
+  THEMES,
+  ACCENTS,
   visibleView,
 } from './model'
-import type { CacheState, CacheTtlSetting, Gauge, Options, Part, Shown, Style, View } from './model'
+import type { CacheState, CacheTtlSetting, Gauge, Options, Part, Shown, Style, Theme, View } from './model'
 import type { PillPart } from './svg'
 import {
   barSvg,
@@ -54,7 +58,9 @@ import {
   historySvg,
   liveDotSvg,
   pillSvg,
+  ringSvg,
   ruleSvg,
+  setAccent,
   sparkSvg,
   SVG_COLOR,
   SVG_QUIET,
@@ -81,11 +87,36 @@ const COLOR: Record<Level | 'ctx' | 'quiet' | 'track' | 'tick', string> = {
   tick: '#e6e3da',
 }
 
+/** What the calm colours were before any theme, so `default` puts them back. */
+const DEFAULT_COLOR = { calm: COLOR.calm, ctx: COLOR.ctx }
+
+/** Applies a theme to every drawing: what is calm, and context, take the accent in every style; amber and red never change. */
+function applyTheme(theme: Theme): void {
+  const accent = theme === 'default' ? undefined : ACCENTS[theme]
+  COLOR.calm = accent?.terminal ?? DEFAULT_COLOR.calm
+  COLOR.ctx = accent?.terminal ?? DEFAULT_COLOR.ctx
+  setAccent(accent?.svg)
+}
+
+/** The inset style's palette (the dark panel, one grey, and a bright level colour with its tinted fill and edge). */
+const INSET = {
+  well: '#0d0d0f',
+  edge: '#2a2a2f',
+  text: '#ececee',
+  dim: '#8b8b94',
+  grey: '#5a5a64',
+  calm: { fg: '#6fcf8e', bg: '#0e1a12', edge: '#2f6b45' },
+  warm: { fg: '#f08a3c', bg: '#1a110c', edge: '#6a3418' },
+  hot: { fg: '#e5534b', bg: '#1a0f0f', edge: '#6a2a26' },
+  cold: { fg: '#7cc4ff', bg: '#0e1820', edge: '#2f5c80' },
+} as const
+
 const PERIODS: readonly Period[] = ['daily', 'weekly', 'monthly']
 
 type Settings = Options & {
   display: string
   style: Style
+  theme: Theme
   adminKey: string
   adminUser: string
   adminWorkspaceId: string
@@ -105,6 +136,7 @@ function readSettings(options: Readonly<Record<string, unknown>>): Settings {
   return {
     display: String(options.display ?? 'band'),
     style: parseStyle(String(options.style ?? 'pulse')) ?? 'pulse',
+    theme: parseTheme(String(options.theme ?? 'default')) ?? 'default',
     budgetUsd: Number(options.budget_usd ?? 0) || 0,
     budgetPeriod: PERIODS.includes(period) ? period : 'monthly',
     orgLimitUsd: Number(options.org_limit_usd ?? 0) || 0,
@@ -613,7 +645,7 @@ async function statusReport($: EngineInterface): Promise<string> {
   const spend = await read($, spendAtom)
   const usd = (n: number) => (n > 0 ? formatUsd(n) : 'off')
   const lines = [
-    `Settings: display ${settings.display} · style ${settings.style} · budget_usd ${usd(settings.budgetUsd)} (${settings.budgetPeriod}) · org_limit_usd ${usd(settings.orgLimitUsd)} · Admin API key ${adminKey ? 'set' : 'not set'}${settings.adminUser ? ` · admin_user ${settings.adminUser}` : ''}${settings.adminWorkspaceId ? ` · workspace ${settings.adminWorkspaceId}` : ''}`,
+    `Settings: display ${settings.display} · style ${settings.style} · theme ${settings.theme} · budget_usd ${usd(settings.budgetUsd)} (${settings.budgetPeriod}) · org_limit_usd ${usd(settings.orgLimitUsd)} · Admin API key ${adminKey ? 'set' : 'not set'}${settings.adminUser ? ` · admin_user ${settings.adminUser}` : ''}${settings.adminWorkspaceId ? ` · workspace ${settings.adminWorkspaceId}` : ''}`,
   ]
   const kinds = (snapshot?.windows ?? []).map(w => `${w.kind} ${w.percentUsed}%`)
   lines.push(
@@ -674,6 +706,7 @@ async function statusReport($: EngineInterface): Promise<string> {
 
 export const register: Register = (on, options) => {
   settings = readSettings(options)
+  applyTheme(settings.theme)
   isBand = settings.display !== 'status'
   isStatus = settings.display !== 'band'
   others = []
@@ -695,7 +728,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: COMMAND,
       description: 'Usage details pane: windows, spend, forecast and cost per turn',
-      argumentHint: '[status | style <name> | show|hide|only <parts> | budget <usd> [period] | period <p> | import | refresh | close]',
+      argumentHint: '[status | style <name> | theme <name> | show|hide|only <parts> | budget <usd> [period] | period <p> | import | refresh | close]',
     })
 
     const sessionId = await $.session.id()
@@ -881,6 +914,18 @@ export const register: Register = (on, options) => {
       return {
         text: `The bar now draws in the ${style} style.${isBand ? '' : ` It shows once display is band or both.`}`,
       }
+    }
+    if (verb === 'theme') {
+      const theme = parseTheme(arg)
+      if (!theme) return { text: `Usage: /${COMMAND} theme <${THEMES.join(' | ')}>. It's ${settings.theme} now.` }
+      const denied = await setOption($, 'theme', theme)
+      if (denied) return { text: `Could not set the theme: ${denied}` }
+      settings = { ...settings, theme }
+      applyTheme(theme)
+      drawnPercent.clear()
+      $.ui.invalidate('ui.render')
+
+      return { text: `The bar now uses the ${theme} theme, in every style.${isBand ? '' : ` It shows once display is band or both.`}` }
     }
     if (verb === 'status') return { text: await statusReport($) }
     if (verb === 'import') return { text: await runImport($) }
@@ -1079,7 +1124,9 @@ export const register: Register = (on, options) => {
         ? [{ id: 'ctx', label: 'ctx', value: `${Math.round(ctx)}%`, level: ctxLevel, percent: ctx, title: ctxTitle }]
         : []),
     ]
-    const quiet = isTerminal ? COLOR.quiet : SVG_QUIET
+    // Calm bars are grey; a theme gives them its accent instead.
+    const themed = settings.theme === 'default' ? undefined : ACCENTS[settings.theme]
+    const quiet = themed ? (isTerminal ? themed.terminal : themed.svg) : isTerminal ? COLOR.quiet : SVG_QUIET
     // On a fill the text keeps the theme's own colour; the fill carries the level.
     const entryParts = (e: Entry, isOnFill: boolean) => {
       const tint = isOnFill ? undefined : toneOf(e.level)
@@ -1229,6 +1276,98 @@ export const register: Register = (on, options) => {
       if (Svg) return svg(liveDotSvg(tone('calm')), 'A turn is running', 12, 12)
 
       return <Text color={COLOR.calm}>{PULSE_FRAMES[pulseFrame % PULSE_FRAMES.length]}</Text>
+    }
+
+    if (style === 'inset') {
+      // A dark well, always, so the level colours below are the bright ones and read on any terminal or desktop theme.
+      const accent = ACCENTS[settings.theme === 'default' ? 'violet' : settings.theme].terminal
+      const lv = (level: Level | 'cold') => INSET[level]
+      // A loud part is a capsule: a tinted fill, and on the desktop its own edge, so the terminal keeps to one row.
+      const capsule = (level: Level | 'cold', children: unknown[]) => {
+        const c = lv(level)
+
+        return (
+          <Box backgroundColor={c.bg} {...(Svg ? { borderStyle: 'round', borderColor: c.edge } : {})} paddingX={1} gap={1} alignItems="center">
+            {children}
+          </Box>
+        )
+      }
+      const insetGauge = (g: Gauge) => {
+        const c = lv(g.level)
+        const limit = isMoney(g) ? <Text color={isLoud(g.level) ? c.fg : INSET.dim} dimColor={isLoud(g.level)}>/ {formatUsd(g.limitUsd!)}</Text> : undefined
+        if (!isLoud(g.level)) {
+          return (
+            <Box gap={1} alignItems="center">
+              <Text color={INSET.dim}>{g.label}</Text>
+              {meter(g.id, g.percent, undefined, g.level, titleOf(g), INSET.grey, isMoney(g) ? 56 : 40)}
+              <Text color={INSET.text}>{amount(g)}</Text>
+              {limit}
+            </Box>
+          )
+        }
+        const note = gaugeNote(g, g.id === 'five_hour' ? rate : undefined, now)
+
+        return capsule(g.level, [
+          <Text bold color={c.fg}>{g.level === 'hot' ? `⚠ ${g.label}` : g.label}</Text>,
+          meter(g.id, g.percent, g.pace, g.level, titleOf(g), c.fg, isNarrow ? 52 : isMoney(g) ? 110 : 84),
+          <Text bold color={c.fg}>{amount(g)}</Text>,
+          limit,
+          note ? <Text color={c.fg}>{note}</Text> : undefined,
+          !isNarrow && g.resetsAt !== undefined ? <Text color={c.fg} dimColor>resets {formatReset(g.resetsAt, now)}</Text> : undefined,
+        ])
+      }
+      const insetCache = !cache
+        ? undefined
+        : cache.level === 'calm'
+          ? (
+              <Box gap={1} alignItems="center">
+                <Text color={INSET.dim}>cache</Text>
+                <Text color={INSET.dim}>{cacheClock}</Text>
+              </Box>
+            )
+          : cache.level === 'warm'
+            ? capsule('warm', [
+                <Text bold color={INSET.warm.fg}>cache</Text>,
+                Svg ? cacheWarm(false, INSET.warm.fg) : <Text bold color={INSET.warm.fg}>{cacheClock}</Text>,
+                !isNarrow ? <Text color={INSET.warm.fg}>expires soon</Text> : undefined,
+              ])
+            : capsule('cold', [<Text bold color={INSET.cold.fg}>⚠ cache cold</Text>, <Text bold color={INSET.cold.fg}>{cacheCost}</Text>])
+      const ctxRing = (color: string) =>
+        Svg ? svg(ringSvg(ctx ?? 0, color, ctxTitle), ctxTitle, 16, 16) : <Text color={color}>{ringGlyph(ctx ?? 0)}</Text>
+      const insetCtx =
+        ctx === undefined
+          ? undefined
+          : isLoud(ctxLevel)
+            ? capsule(ctxLevel, [ctxRing(lv(ctxLevel).fg), <Text bold color={lv(ctxLevel).fg}>{Math.round(ctx)}%</Text>])
+            : (
+                <Box gap={1} alignItems="center">
+                  {ctxRing(INSET.dim)}
+                  <Text color={INSET.text}>{Math.round(ctx)}%</Text>
+                </Box>
+              )
+
+      return (
+        <Box
+          paddingX={1}
+          columnGap={2}
+          flexWrap="wrap"
+          alignItems="center"
+          backgroundColor={INSET.well}
+          {...(Svg ? { borderStyle: 'round', borderColor: INSET.edge } : {})}
+        >
+          <Text color={accent}>✦</Text>
+          {gauges.map(insetGauge)}
+          {insetCache}
+          <Box flexGrow={1} />
+          {figures.map(f => (
+            <Box gap={1} alignItems="center">
+              {isNarrow && f.isSession ? undefined : <Text color={INSET.dim}>{f.label}</Text>}
+              <Text bold color={INSET.text}>{f.value}</Text>
+            </Box>
+          ))}
+          {insetCtx}
+        </Box>
+      )
     }
 
     return (

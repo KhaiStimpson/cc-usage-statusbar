@@ -8,6 +8,23 @@ export const SVG_COLOR: Record<Level | 'ctx', string> = {
   hot: '#d9563f',
   ctx: '#6f8fbf',
 }
+/** The colours the default theme draws with, kept so a theme can be put back. */
+const DEFAULT_CALM = { calm: SVG_COLOR.calm, ctx: SVG_COLOR.ctx }
+
+/** Turns what is calm (and context) to a theme's accent for every drawing; `undefined` puts the greens back. */
+export function setAccent(color: string | undefined): void {
+  SVG_COLOR.calm = color ?? DEFAULT_CALM.calm
+  SVG_COLOR.ctx = color ?? DEFAULT_CALM.ctx
+  // A chips pill that is calm is filled with the accent, a little lighter than the grey it replaces.
+  PILL_FILL.calm = color ? rgba(color, 0.45) : DEFAULT_PILL_CALM
+}
+
+function rgba(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16)
+
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${alpha})`
+}
+
 /** The grey of a calm ledger segment: present, but asking for nothing. */
 export const SVG_QUIET = '#8a877f'
 const TRACK = 'fill="#808080" fill-opacity="0.28"'
@@ -127,6 +144,23 @@ export function liveDotSvg(color: string): string {
   )
 }
 
+/** A ring, `size` px across, filled clockwise from the top to `percent`. */
+export function ringSvg(percent: number, color: string, title: string, size = 16): string {
+  const stroke = 2.6
+  const r = (size - stroke) / 2
+  const c = r1(2 * Math.PI * r)
+  const fill = r1((clamp(percent) / 100) * c)
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><title>${esc(title)}</title>`,
+    `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="#808080" stroke-opacity="0.35" stroke-width="${stroke}"/>`,
+    fill > 0
+      ? `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round" stroke-dasharray="${fill} ${c}" transform="rotate(-90 ${size / 2} ${size / 2})"/>`
+      : '',
+    '</svg>',
+  ].join('')
+}
+
 /** A small line of recent daily spend that draws itself in. */
 export function sparkSvg(values: readonly number[], color: string, title: string): string {
   const w = 44
@@ -226,8 +260,9 @@ export type PillSvg = {
   clock?: { remainingMs: number; warnMs: number }
 }
 
+const DEFAULT_PILL_CALM = 'rgba(128,128,128,0.45)'
 const PILL_FILL: Record<Level, string> = {
-  calm: 'rgba(128,128,128,0.45)',
+  calm: DEFAULT_PILL_CALM,
   warm: 'rgba(212,146,58,0.62)',
   hot: 'rgba(217,86,63,0.66)',
 }

@@ -802,7 +802,7 @@ describe('styles', () => {
     const written = styleRow(on)
 
     const bad = await $.command.run({ ...refresh, args: 'style fancy' })
-    expect(bad.text).toBe("Usage: /usagebar style <chips | ledger | pulse>. It's pulse now.")
+    expect(bad.text).toBe("Usage: /usagebar style <chips | inset | ledger | pulse>. It's pulse now.")
     expect((await $.command.run({ ...refresh, args: 'style classic' })).text).toContain('Usage:')
     expect(written).toEqual({})
 
@@ -814,7 +814,7 @@ describe('styles', () => {
     await ui.unmount()
   })
 
-  for (const style of ['chips', 'ledger', 'pulse'] as const) {
+  for (const style of ['chips', 'inset', 'ledger', 'pulse'] as const) {
     test(`${style} draws every figure on both surfaces, with SVG bars on the desktop`, { options: { style, budget_usd: 500 } }, async ($, on) => {
       world(on, SUBSCRIPTION)
       await $.session.measure({ ...SUBSCRIPTION, changed: ['cost'] })
@@ -895,6 +895,127 @@ describe('styles', () => {
     expect(bars).toHaveLength(3)
     // No note sits under a bar.
     expect(await ui.find({ type: 'Text', text: 'expires soon' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('inset keeps calm gauges quiet in a dark well, with a ring for context', { options: { style: 'inset' } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    const desktop = await $.ui.mount({ surface: 'desktop', ...band(160) })
+    const boxes = await desktop.findAll({ type: 'Box' })
+    const well = boxes.find(b => b.props.backgroundColor === '#0d0d0f')
+    expect(well?.props.borderStyle).toBe('round')
+    // Nothing is tinted while everything is calm.
+    expect(boxes.filter(b => b.props.backgroundColor === '#1a110c' || b.props.backgroundColor === '#1a0f0f')).toHaveLength(0)
+    const drawn = (await desktop.findAll({ type: 'Svg' })).map(s => String(s.props.alt))
+    expect(drawn).toContain('context 48% full')
+    await desktop.unmount()
+    // The terminal keeps to one row: the well's colour, no border, and a pie glyph for the ring.
+    const terminal = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    const flat = (await terminal.findAll({ type: 'Box' })).find(b => b.props.backgroundColor === '#0d0d0f')
+    expect(flat?.props.borderStyle).toBeUndefined()
+    expect(await terminal.find({ type: 'Text', text: '◑' })).toBeDefined()
+    expect(await terminal.find({ type: 'Text', text: '48%' })).toBeDefined()
+    await terminal.unmount()
+  })
+
+  test('inset turns a loud gauge into an amber capsule with its note and reset', { options: { style: 'inset' } }, async ($, on) => {
+    world(on, BUSY)
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    const capsule = (await ui.findAll({ type: 'Box' })).filter(b => b.props.backgroundColor === '#1a110c')
+    expect(capsule).toHaveLength(1)
+    expect(await ui.find({ type: 'Text', text: 'ahead of pace' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /resets/ })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('inset shows a dollar limit even while calm', { options: { style: 'inset', budget_usd: 500 } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    await $.session.measure({ ...SUBSCRIPTION, changed: ['cost'] })
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    expect(await ui.find({ type: 'Text', text: 'budget' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: '/ $500' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('inset marks a lapsed cache in ice blue', { options: { style: 'inset' } }, async ($, on) => {
+    const { clock } = world(on, SUBSCRIPTION)
+    on('turn.complete', () => ({ text: '' }))
+    await $.turn.complete(TURN)
+    await clock.advance(MINUTES(6))
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    expect((await ui.findAll({ type: 'Box' })).filter(b => b.props.backgroundColor === '#0e1820')).toHaveLength(1)
+    expect(await ui.find({ type: 'Text', text: '⚠ cache cold' })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('themes', () => {
+  function themeRow(on: On) {
+    const written: Record<string, unknown> = {}
+    on('config.list', () => ({
+      value: [
+        {
+          key: 'usage-statusbar@cc-usage-statusbar.theme',
+          label: 'Theme',
+          kind: 'choice',
+          value: 'default',
+          provider: { kind: 'engine' },
+          isLocked: false,
+        },
+      ] as never,
+    }))
+    on('config.set', ($, e) => {
+      written[e.key.split('.').pop()!] = e.value
+
+      return { value: e.value }
+    })
+
+    return written
+  }
+
+  test('theme switches and refuses unknown names', async ($, on) => {
+    world(on, SUBSCRIPTION)
+    on('command.run', () => ({ text: '' }))
+    const written = themeRow(on)
+
+    const bad = await $.command.run({ ...refresh, args: 'theme neon' })
+    expect(bad.text).toBe("Usage: /usagebar theme <default | violet | orange | rose>. It's default now.")
+    expect(written).toEqual({})
+    const ran = await $.command.run({ ...refresh, args: 'theme Rose' })
+    expect(ran.text).toBe('The bar now uses the rose theme, in every style.')
+    expect(written).toEqual({ theme: 'rose' })
+  })
+
+  for (const style of ['pulse', 'chips', 'ledger', 'inset'] as const) {
+    test(`${style} takes the accent for what is calm, on both surfaces`, { options: { style, theme: 'violet' } }, async ($, on) => {
+      world(on, SUBSCRIPTION)
+      const terminal = await $.ui.mount({ surface: 'terminal', ...band(160) })
+      const violet = (await terminal.findAll({ type: 'Text' })).some(x => x.props.color === '#a79cf7')
+      expect(violet).toBe(true)
+      await terminal.unmount()
+      if (style !== 'inset') {
+        const desktop = await $.ui.mount({ surface: 'desktop', ...band(160) })
+        const drawn = (await desktop.findAll({ type: 'Svg' })).map(s => String(s.props.source)).join('')
+        // Chips fill the pill with the accent as rgba; the others draw it as a hex.
+        expect(drawn.includes('#8b7fe8') || drawn.includes('139,127,232')).toBe(true)
+        expect(drawn).not.toContain('#4f9e6a')
+        await desktop.unmount()
+      }
+    })
+  }
+
+  test('a loud gauge keeps its amber under any theme', { options: { style: 'pulse', theme: 'rose' } }, async ($, on) => {
+    world(on, BUSY)
+    const ui = await $.ui.mount({ surface: 'desktop', ...band(160) })
+    const drawn = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.source)).join('')
+    expect(drawn).toContain('#d4923a')
+    await ui.unmount()
+  })
+
+  test('the default theme keeps the original greens', { options: { style: 'pulse' } }, async ($, on) => {
+    world(on, SUBSCRIPTION)
+    const ui = await $.ui.mount({ surface: 'terminal', ...band(160) })
+    expect((await ui.findAll({ type: 'Text' })).some(x => x.props.color === '#7fb685')).toBe(true)
     await ui.unmount()
   })
 })

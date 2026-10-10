@@ -1,7 +1,7 @@
 {
   "name": "usage-statusbar",
   "displayName": "Usage Status Bar",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "A slim colored line above the prompt with your real usage: subscription windows, org spend limits, budgets, context and cost",
   "author": {
     "name": "Khai Stimpson"
@@ -23,13 +23,26 @@
     "style": {
       "type": "string",
       "title": "Style",
-      "description": "How the band looks. Calm gauges stay small in every style; a gauge near its limit gets a full bar, a note and its reset time. pulse: animated bars on the desktop, with a live dot while a turn runs. chips: each gauge is a pill filled to its percentage, amber or red near a limit. ledger: each gauge is a column with its own thin bar directly beneath it. /usagebar style <name> switches it.",
+      "description": "How the band looks. Calm gauges stay small in every style; a gauge near its limit gets a full bar, a note and its reset time. pulse: animated bars on the desktop, with a live dot while a turn runs. chips: each gauge is a pill filled to its percentage, amber or red near a limit. ledger: each gauge is a column with its own thin bar directly beneath it. inset: a dark panel where a gauge near its limit becomes a tinted capsule with a glowing bar, and context is a ring. /usagebar style <name> switches it.",
       "options": [
         "chips",
+        "inset",
         "ledger",
         "pulse"
       ],
       "default": "pulse"
+    },
+    "theme": {
+      "type": "string",
+      "title": "Theme",
+      "description": "The accent colour, in every style. default keeps the original greens; violet, orange and rose recolour what is calm (bars, the live dot, context) and the inset style's mark. Amber and red never change. /usagebar theme <name> switches it.",
+      "options": [
+        "default",
+        "violet",
+        "orange",
+        "rose"
+      ],
+      "default": "default"
     },
     "show_5h": {
       "type": "boolean",

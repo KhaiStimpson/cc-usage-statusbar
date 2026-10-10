@@ -34,12 +34,18 @@ usage ██████▎░░░ $312 / $500 ahead of pace resets Nov 1   to
   - **Not tracked:** effort changes, fast mode's first request, MCP or plugin changes without tool search, and image trimming can also miss the cache. The plugin cannot see them coming, so the part will not warn about them.
 - **Notifications** pop up at 80%, 95% and 100% of any window or limit, once per window.
 - **Narrow bands** (under 100 terminal columns, or 70 on the desktop) drop reset times and shorten bars.
-- **Three styles**, switched with `/usagebar style <name>`:
+- **Four styles**, switched with `/usagebar style <name>`:
   - `pulse`: the line above. This is the default. In Claude Code Desktop calm gauges get a thin bar, loud ones a full rounded bar that grows to new values, with a sheen, a breathing pace marker and a red outline near a limit. A dot pulses at the start of the line while a turn runs. With API pricing, `today` also gets a small chart of recent daily spend. The motion stops when your system asks for reduced motion. In a terminal the full bars fill by eighths of a cell.
   - `chips`: each gauge is a pill with its percentage filled in behind the text: grey while calm, amber or red when it needs attention, with its note and reset time inline. Spend figures sit plain on the right. There are no separate bars, so the fill and the number are the same object.
   - `ledger`: each gauge is a column with its label and value on top and its own thin bar directly beneath at the same width, so every bar sits under the thing it measures. Bars stay grey while calm and take their colour when a gauge turns loud; notes and reset times stay on the top line.
 
+  - `inset`: a dark panel with the same dim, quiet gauges. A gauge that turns amber or red becomes a tinted capsule (on the desktop with its own edge) holding a glowing bar, the note and the reset time. Dollar gauges keep their `/ $limit` while calm, and a lapsed cache is an ice-blue capsule. Context is a ring, and a small accent mark opens the line. The panel stays dark on a light terminal or desktop theme, so the level colours read the same everywhere.
+
   On the desktop the bars are drawn as SVG, so they come out solid and rounded instead of as thin lines of characters. Hover a bar for its percentage and pace.
+
+## Themes
+
+`/usagebar theme <default | violet | orange | rose>` sets the accent for **every** style. It recolours what is calm: calm bars and pills, the live dot, context, and the inset style's mark. Amber, red and the inset style's ice blue never change, so a warning looks the same in any theme. `default` keeps the original greens. Theme and style are independent settings, so `pulse` (or any style) takes any theme.
 
 ## Where the numbers come from
 
