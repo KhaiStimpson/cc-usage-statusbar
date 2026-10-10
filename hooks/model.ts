@@ -463,13 +463,38 @@ export function visibleView(view: View, shown: Shown): View {
 }
 
 /** How the band draws, chosen with `/usagebar style`. */
-export const STYLES = ['chips', 'ledger', 'pulse'] as const
+export const STYLES = ['chips', 'inset', 'ledger', 'pulse'] as const
 export type Style = (typeof STYLES)[number]
 
 export function parseStyle(word: string): Style | undefined {
   const w = word.toLowerCase()
 
   return (STYLES as readonly string[]).includes(w) ? (w as Style) : undefined
+}
+
+/**
+ * The band's accent, chosen with `/usagebar theme` and independent of the style. `default` keeps the original greens;
+ * the others recolour what is calm (bars, the live dot, context) and the inset style's mark, never amber or red.
+ */
+export const THEMES = ['default', 'violet', 'orange', 'rose'] as const
+export type Theme = (typeof THEMES)[number]
+
+export function parseTheme(word: string): Theme | undefined {
+  const w = word.toLowerCase()
+
+  return (THEMES as readonly string[]).includes(w) ? (w as Theme) : undefined
+}
+
+/** The accent per theme: `terminal` for cells on a dark ground, `svg` a step deeper to read on the desktop's light and dark. */
+export const ACCENTS: Record<Exclude<Theme, 'default'>, { terminal: string; svg: string }> = {
+  violet: { terminal: '#a79cf7', svg: '#8b7fe8' },
+  orange: { terminal: '#e0836a', svg: '#d2694b' },
+  rose: { terminal: '#f08fb4', svg: '#e0709f' },
+}
+
+/** One cell that stands in for a ring: empty, a quarter, half, three quarters, full. */
+export function ringGlyph(percent: number): string {
+  return '○◔◑◕●'[Math.min(4, Math.round((clamp(percent) / 100) * 4))]!
 }
 
 /** How long the API keeps a prompt cache entry after its last use. */
